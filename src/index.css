@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: theme('fontFamily.sans');
+  background: radial-gradient(circle at top, #1e293b 0, #020617 50%, #000 100%);
+}
+
+.glass-panel {
+  @apply bg-slate-900/50 border border-slate-700/60 shadow-glass backdrop-blur-xl rounded-2xl;
+}
+
+.glass-soft {
+  @apply bg-slate-900/40 border border-slate-700/40 shadow-lg backdrop-blur-lg rounded-2xl;
+}
+
+.pill {
+  @apply inline-flex items-center gap-2 rounded-full border border-slate-700/70 bg-slate-900/60 px-3 py-1 text-xs font-medium text-slate-200 shadow-sm;
+}
+

@@ -1,14 +1,16 @@
-import { createContext, ReactNode, useContext, useState } from 'react';
+import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
+import { getSupabaseClient } from '../lib/supabaseClient';
 
 type User = {
   email: string;
   isKycVerified: boolean;
+  emailVerified: boolean;
 } | null;
 
 type UserContextValue = {
   user: User;
   isAuthenticated: boolean;
-  login: (email: string) => void;
+  login: (email: string, emailVerified: boolean) => void;
   logout: () => void;
   completeKyc: () => void;
 };
@@ -22,8 +24,8 @@ type UserProviderProps = {
 export const UserProvider = ({ children }: UserProviderProps) => {
   const [user, setUser] = useState<User>(null);
 
-  const login = (email: string) => {
-    setUser({ email, isKycVerified: false });
+  const login = (email: string, emailVerified: boolean) => {
+    setUser({ email, isKycVerified: false, emailVerified });
   };
 
   const logout = () => {
@@ -36,6 +38,23 @@ export const UserProvider = ({ children }: UserProviderProps) => {
       return { ...prev, isKycVerified: true };
     });
   };
+
+  // Попытка восстановить сессию Supabase при монтировании
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    supabase.auth.getSession().then(({ data }) => {
+      const sessionUser = data.session?.user;
+      if (!sessionUser?.email) return;
+
+      setUser({
+        email: sessionUser.email,
+        isKycVerified: false,
+        emailVerified: Boolean(sessionUser.email_confirmed_at)
+      });
+    });
+  }, []);
 
   return (
     <UserContext.Provider

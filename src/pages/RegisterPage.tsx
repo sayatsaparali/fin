@@ -37,29 +37,32 @@ const RegisterPage = () => {
 
     const supabase = getSupabaseClient();
 
-    if (supabase) {
-      // Регистрация через Supabase Auth с метаданными для письма
-      const { error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/email-verification`,
-          data: {
-            appName: 'FinHub',
-            senderName: 'FinHub Support'
-          }
-        }
-      });
-
-      if (signUpError) {
-        setError('Не удалось создать аккаунт. Попробуйте ещё раз.');
-        // eslint-disable-next-line no-console
-        console.error(signUpError);
-        return;
-      }
+    if (!supabase) {
+      setError('Supabase не настроен. Проверьте переменные окружения.');
+      return;
     }
 
-    login(email);
+    // Регистрация через Supabase Auth с метаданными для письма
+    const { error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/email-verification`,
+        data: {
+          appName: 'FinHub',
+          senderName: 'FinHub Support'
+        }
+      }
+    });
+
+    if (signUpError) {
+      setError('Не удалось создать аккаунт. Попробуйте ещё раз.');
+      // eslint-disable-next-line no-console
+      console.error(signUpError);
+      return;
+    }
+
+    login(email, false);
     setInfo('Добро пожаловать в FinHub! На вашу почту отправлено письмо для подтверждения.');
     navigate('/email-verification');
   };
@@ -140,4 +143,3 @@ const RegisterPage = () => {
 };
 
 export default RegisterPage;
-

@@ -7,10 +7,16 @@ type ProtectedRouteProps = {
 };
 
 const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
-  const { isAuthenticated } = useUser();
+  const { user, isAuthenticated } = useUser();
   const location = useLocation();
 
-  if (!isAuthenticated) {
+  // Не пустим неавторизованных и пользователей без подтверждённого email
+  if (!isAuthenticated || !user?.emailVerified) {
+    // Если пользователь есть, но email не подтверждён — отправим на страницу ожидания
+    if (user && !user.emailVerified) {
+      return <Navigate to="/email-verification" replace state={{ from: location }} />;
+    }
+
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 

@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
+import { getSupabaseClient } from '../lib/supabaseClient';
 
 const emailRegex = /\S+@\S+\.\S+/;
 
@@ -12,7 +13,7 @@ const LoginPage = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -26,9 +27,36 @@ const LoginPage = () => {
       return;
     }
 
-    // В демо-версии авторизация локальная через контекст.
-    // В продакшене сюда добавится вызов Supabase Auth signInWithPassword.
-    login(email);
+    const supabase = getSupabaseClient();
+
+    if (!supabase) {
+      setError('Supabase не настроен. Проверьте переменные окружения.');
+      return;
+    }
+
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (signInError || !data.user) {
+      setError('Неверный email или пароль.');
+      // eslint-disable-next-line no-console
+      if (signInError) console.error(signInError);
+      return;
+    }
+
+    const emailVerified = Boolean(data.user.email_confirmed_at);
+
+    // Обновляем контекст пользователя
+    login(email, emailVerified);
+
+    // Если email не подтверждён — отправляем на страницу ожидания
+    if (!emailVerified) {
+      navigate('/email-verification');
+      return;
+    }
+
     navigate('/dashboard');
   };
 
@@ -89,4 +117,3 @@ const LoginPage = () => {
 };
 
 export default LoginPage;
-

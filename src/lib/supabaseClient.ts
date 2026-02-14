@@ -11,7 +11,7 @@ export const getSupabaseClient = () => {
   if (!supabaseUrl || !supabaseAnonKey) {
     // eslint-disable-next-line no-console
     console.warn(
-      'Supabase не сконфигурирован (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY). Регистрация будет работать в демо‑режиме без реальной отправки писем.'
+      'Supabase не сконфигурирован. Укажите VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY в .env.local.'
     );
     return null;
   }
@@ -19,4 +19,3 @@ export const getSupabaseClient = () => {
   supabase = createClient(supabaseUrl, supabaseAnonKey);
   return supabase;
 };
-

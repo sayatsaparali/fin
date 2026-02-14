@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   CartesianGrid,
@@ -11,16 +11,7 @@ import {
 } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
-
-const analyticsData = [
-  { name: 'Пн', income: 180000, expense: 120000 },
-  { name: 'Вт', income: 160000, expense: 140000 },
-  { name: 'Ср', income: 150000, expense: 155000 },
-  { name: 'Чт', income: 170000, expense: 130000 },
-  { name: 'Пт', income: 200000, expense: 190000 },
-  { name: 'Сб', income: 120000, expense: 135000 },
-  { name: 'Вс', income: 110000, expense: 90000 }
-];
+import { fetchDashboardData, type DashboardData } from '../lib/financeApi';
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('ru-KZ', {
@@ -29,9 +20,25 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 0
   }).format(value);
 
+const formatDateTime = (value: string) => {
+  if (!value) return 'Дата не указана';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Дата не указана';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+};
+
 const DashboardPage = () => {
   const { user } = useUser();
   const navigate = useNavigate();
+
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [smartPocket, setSmartPocket] = useState(250000);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
@@ -42,7 +49,7 @@ const DashboardPage = () => {
     'Unified'
   );
 
-  const totalBalance = 3250000;
+  const totalBalance = dashboardData?.totalBalance ?? 0;
   const availableBalance = useMemo(
     () => Math.max(totalBalance - smartPocket, 0),
     [totalBalance, smartPocket]
@@ -63,6 +70,32 @@ const DashboardPage = () => {
 
     return 'Комиссия: 0 ₸ (Open Banking Tariff)';
   }, [fromBank, toBank]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const load = async () => {
+      try {
+        setLoading(true);
+        const data = await fetchDashboardData();
+        if (!isMounted) return;
+        setDashboardData(data);
+      } catch (e) {
+        if (!isMounted) return;
+        setError('Не удалось загрузить данные дашборда.');
+        // eslint-disable-next-line no-console
+        console.error(e);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    load();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-4 px-4 py-6 sm:gap-6 sm:px-6 lg:px-8">
@@ -156,7 +189,9 @@ const DashboardPage = () => {
                 </div>
                 <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Общий баланс</p>
                 <p className="text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl">
-                  {formatCurrency(totalBalance).replace('KZT', '₸')}
+                  {loading && !dashboardData
+                    ? '—'
+                    : formatCurrency(totalBalance).replace('KZT', '₸')}
                 </p>
                 <p className="text-xs text-slate-300 sm:text-sm">
                   Доступно:{' '}
@@ -205,7 +240,7 @@ const DashboardPage = () => {
                 <div>
                   <p className="text-[11px] text-amber-100/80">Доступно</p>
                   <p className="mt-1 text-xl font-semibold text-amber-50">
-                    {formatCurrency(1425000).replace('KZT', '₸')}
+                    {formatCurrency(dashboardData?.kaspiBalance ?? 0).replace('KZT', '₸')}
                   </p>
                 </div>
                 <div className="mt-2 flex justify-between text-[10px] text-amber-100/80">
@@ -230,7 +265,7 @@ const DashboardPage = () => {
                 <div>
                   <p className="text-[11px] text-emerald-100/80">Доступно</p>
                   <p className="mt-1 text-xl font-semibold text-emerald-50">
-                    {formatCurrency(980000).replace('KZT', '₸')}
+                    {formatCurrency(dashboardData?.freedomBalance ?? 0).replace('KZT', '₸')}
                   </p>
                 </div>
                 <div className="mt-2 flex justify-between text-[10px] text-emerald-100/80">
@@ -255,7 +290,7 @@ const DashboardPage = () => {
                 <div>
                   <p className="text-[11px] text-yellow-50/80">Доступно</p>
                   <p className="mt-1 text-xl font-semibold text-yellow-50">
-                    {formatCurrency(845000).replace('KZT', '₸')}
+                    {formatCurrency(dashboardData?.halykBalance ?? 0).replace('KZT', '₸')}
                   </p>
                 </div>
                 <div className="mt-2 flex justify-between text-[10px] text-yellow-50/80">
@@ -349,6 +384,12 @@ const DashboardPage = () => {
 
         {/* Right column */}
         <section className="flex flex-col gap-5">
+          {error && (
+            <section className="glass-soft border border-red-400/40 bg-red-500/10 px-4 py-3 text-xs text-red-100">
+              {error}
+            </section>
+          )}
+
           {/* Analytics */}
           <section className="glass-panel flex flex-1 flex-col px-4 py-4 sm:px-6 sm:py-5">
             <div className="mb-4 flex items-center justify-between">
@@ -360,17 +401,23 @@ const DashboardPage = () => {
               </div>
               <div className="pill bg-slate-900/70 text-[11px] text-slate-300">
                 <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-                Средний чистый поток:{' '}
-                {formatCurrency(
-                  analyticsData.reduce((acc, d) => acc + (d.income - d.expense), 0) /
-                    analyticsData.length
-                ).replace('KZT', '₸')}
+                {loading || !dashboardData
+                  ? 'Загрузка аналитики...'
+                  : `Средний чистый поток: ${formatCurrency(
+                      dashboardData.analytics.reduce(
+                        (acc, d) => acc + (d.income - d.expense),
+                        0
+                      ) / dashboardData.analytics.length
+                    ).replace('KZT', '₸')}`}
               </div>
             </div>
 
             <div className="mt-1 h-52 w-full sm:h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={analyticsData} margin={{ top: 10, right: 10, left: -18, bottom: 0 }}>
+                <LineChart
+                  data={dashboardData?.analytics ?? []}
+                  margin={{ top: 10, right: 10, left: -18, bottom: 0 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
                   <XAxis
                     dataKey="name"
@@ -436,6 +483,55 @@ const DashboardPage = () => {
               <div className="h-12 w-1 rounded-full bg-slate-800">
                 <div className="h-7 w-full rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600 shadow-[0_0_16px_rgba(34,197,94,0.7)]" />
               </div>
+            </div>
+          </section>
+
+          {/* Transactions */}
+          <section className="glass-panel px-4 py-4 sm:px-6 sm:py-5">
+            <div className="mb-3">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Транзакции</p>
+              <p className="mt-1 text-sm font-medium text-slate-100">Последние операции из Supabase</p>
+            </div>
+
+            <div className="space-y-2">
+              {(dashboardData?.transactions ?? []).map((tx) => {
+                const isIncome = tx.type === 'income';
+                const isExpense = tx.type === 'expense';
+                const amountColor = isIncome
+                  ? 'text-emerald-300'
+                  : isExpense
+                    ? 'text-rose-300'
+                    : 'text-slate-200';
+                const amountPrefix = isIncome ? '+' : isExpense ? '-' : '';
+
+                return (
+                  <article
+                    key={tx.id}
+                    className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-slate-100">
+                          {tx.description ?? 'Операция без описания'}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-slate-400">
+                          {tx.bank ?? 'Без банка'} • {formatDateTime(tx.occurredAt)}
+                        </p>
+                      </div>
+                      <p className={`shrink-0 text-xs font-semibold ${amountColor}`}>
+                        {amountPrefix}
+                        {formatCurrency(Math.abs(tx.amount)).replace('KZT', '₸')}
+                      </p>
+                    </div>
+                  </article>
+                );
+              })}
+
+              {!loading && (dashboardData?.transactions?.length ?? 0) === 0 && (
+                <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
+                  В таблице `transactions` пока нет записей за последние 7 дней.
+                </p>
+              )}
             </div>
           </section>
         </section>
@@ -555,4 +651,3 @@ const DashboardPage = () => {
 };
 
 export default DashboardPage;
-

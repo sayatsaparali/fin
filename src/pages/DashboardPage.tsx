@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
-import { fetchDashboardData, type DashboardData } from '../lib/financeApi';
+import { fetchDashboardData, type DashboardData, type DashboardTransaction } from '../lib/financeApi';
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('ru-KZ', {
@@ -30,6 +30,24 @@ const formatDateTime = (value: string) => {
     hour: '2-digit',
     minute: '2-digit'
   }).format(date);
+};
+
+const getTransactionLabel = (tx: DashboardTransaction) =>
+  tx.counterparty ?? tx.description ?? 'Операция';
+
+const getTransactionIcon = (tx: DashboardTransaction): { badge: string; tone: string } => {
+  const label = getTransactionLabel(tx).toLowerCase();
+
+  if (label.includes('taxi') || label.includes('yandex')) return { badge: 'TX', tone: 'bg-sky-500/20 text-sky-300' };
+  if (label.includes('magnum') || label.includes('starbucks')) return { badge: 'SH', tone: 'bg-violet-500/20 text-violet-300' };
+  if (label.includes('коммун')) return { badge: 'HM', tone: 'bg-amber-500/20 text-amber-300' };
+  if (label.includes('app store')) return { badge: 'AP', tone: 'bg-indigo-500/20 text-indigo-300' };
+  if (label.includes('зарплата') || label.includes('bonus') || label.includes('бонус')) {
+    return { badge: 'IN', tone: 'bg-emerald-500/20 text-emerald-300' };
+  }
+  if (tx.type === 'income') return { badge: 'IN', tone: 'bg-emerald-500/20 text-emerald-300' };
+  if (tx.type === 'expense') return { badge: 'EX', tone: 'bg-rose-500/20 text-rose-300' };
+  return { badge: 'TR', tone: 'bg-slate-600/30 text-slate-300' };
 };
 
 const DashboardPage = () => {
@@ -487,16 +505,17 @@ const DashboardPage = () => {
           </section>
 
           {/* Transactions */}
-          <section className="glass-panel px-4 py-4 sm:px-6 sm:py-5">
+          <section className="glass-panel px-3 py-3 sm:px-5 sm:py-4">
             <div className="mb-3">
               <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Транзакции</p>
-              <p className="mt-1 text-sm font-medium text-slate-100">Последние операции из Supabase</p>
+              <p className="mt-1 text-sm font-medium text-slate-100">История операций</p>
             </div>
 
-            <div className="space-y-2">
+            <div className="max-h-[52vh] space-y-1.5 overflow-y-auto pr-1">
               {(dashboardData?.transactions ?? []).map((tx) => {
                 const isIncome = tx.type === 'income';
                 const isExpense = tx.type === 'expense';
+                const icon = getTransactionIcon(tx);
                 const amountColor = isIncome
                   ? 'text-emerald-300'
                   : isExpense
@@ -507,18 +526,25 @@ const DashboardPage = () => {
                 return (
                   <article
                     key={tx.id}
-                    className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-2"
+                    className="rounded-xl border border-slate-700/70 bg-slate-900/70 px-2.5 py-2 sm:px-3"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-slate-100">
-                          {tx.description ?? 'Операция без описания'}
+                    <div className="flex items-center gap-2.5">
+                      <div
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${icon.tone}`}
+                      >
+                        {icon.badge}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-medium text-slate-100">
+                          {getTransactionLabel(tx)}
                         </p>
-                        <p className="mt-0.5 text-[11px] text-slate-400">
-                          {tx.bank ?? 'Без банка'} • {formatDateTime(tx.occurredAt)}
+                        <p className="mt-0.5 truncate text-[11px] text-slate-400">
+                          {formatDateTime(tx.occurredAt)} • {tx.bank ?? 'Без счёта'}
                         </p>
                       </div>
-                      <p className={`shrink-0 text-xs font-semibold ${amountColor}`}>
+
+                      <p className={`shrink-0 text-right text-[13px] font-semibold ${amountColor}`}>
                         {amountPrefix}
                         {formatCurrency(Math.abs(tx.amount)).replace('KZT', '₸')}
                       </p>
@@ -529,7 +555,7 @@ const DashboardPage = () => {
 
               {!loading && (dashboardData?.transactions?.length ?? 0) === 0 && (
                 <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
-                  В таблице `transactions` пока нет записей за последние 7 дней.
+                  В таблице `transactions` пока нет записей за последний месяц.
                 </p>
               )}
             </div>

@@ -21,6 +21,7 @@ export type DashboardTransaction = {
   type: 'income' | 'expense' | 'transfer' | 'other';
   occurredAt: string;
   description: string | null;
+  counterparty: string | null;
   bank: string | null;
 };
 
@@ -78,25 +79,27 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     const bank = String(acc.bank ?? '').toLowerCase();
     const balance = Number(acc.balance ?? 0);
 
-    if (bank === 'kaspi') kaspiBalance += balance;
-    if (bank === 'freedom') freedomBalance += balance;
+    if (bank === 'kaspi' || bank === 'kaspi gold') kaspiBalance += balance;
+    if (bank === 'freedom' || bank === 'freedom bank') freedomBalance += balance;
     if (bank === 'halyk') halykBalance += balance;
   });
 
   const totalBalance = kaspiBalance + freedomBalance + halykBalance;
 
-  // 2. Транзакции за последнюю неделю для графика
+  // 2. Транзакции за последний месяц для списка и недельной аналитики
   const now = new Date();
   const weekAgo = new Date(now);
   weekAgo.setDate(now.getDate() - 6);
+  const monthAgo = new Date(now);
+  monthAgo.setDate(now.getDate() - 30);
 
   const { data: transactions, error: txError } = await supabase
     .from('transactions')
-    .select('id, amount, type, occurred_at, description, bank')
+    .select('id, amount, type, occurred_at, description, counterparty, bank')
     .eq('user_id', user.id)
-    .gte('occurred_at', weekAgo.toISOString())
+    .gte('occurred_at', monthAgo.toISOString())
     .order('occurred_at', { ascending: false })
-    .limit(20);
+    .limit(60);
 
   if (txError) {
     throw txError;
@@ -110,6 +113,8 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
 
   (transactions ?? []).forEach((tx) => {
     const date = new Date(tx.occurred_at as string);
+    if (Number.isNaN(date.getTime()) || date < weekAgo) return;
+
     const dayIndex = date.getDay(); // 0 (Вс) - 6 (Сб)
     const label = weekdayLabels[dayIndex];
 
@@ -141,6 +146,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
       type: normalizedType,
       occurredAt: String(tx.occurred_at ?? ''),
       description: tx.description ? String(tx.description) : null,
+      counterparty: tx.counterparty ? String(tx.counterparty) : null,
       bank: tx.bank ? String(tx.bank) : null
     };
   });

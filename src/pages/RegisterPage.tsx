@@ -1,132 +1,433 @@
-import { FormEvent, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { FormEvent, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 const emailRegex = /\S+@\S+\.\S+/;
+const monthOptions = [
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь'
+];
+
+type RegisterStep = 1 | 2 | 3;
+
+const normalizeBirthDate = (day: string, month: string, year: string): string | null => {
+  const d = Number(day);
+  const m = Number(month);
+  const y = Number(year);
+
+  if (!Number.isInteger(d) || !Number.isInteger(m) || !Number.isInteger(y)) {
+    return null;
+  }
+
+  if (y < 1900 || y > new Date().getFullYear() || m < 1 || m > 12 || d < 1 || d > 31) {
+    return null;
+  }
+
+  const candidate = new Date(y, m - 1, d);
+  const isExactDate =
+    candidate.getFullYear() === y && candidate.getMonth() === m - 1 && candidate.getDate() === d;
+  const isFutureDate = candidate > new Date();
+
+  if (!isExactDate || isFutureDate) {
+    return null;
+  }
+
+  return `${y.toString().padStart(4, '0')}-${m.toString().padStart(2, '0')}-${d
+    .toString()
+    .padStart(2, '0')}`;
+};
 
 const RegisterPage = () => {
   const { login } = useUser();
   const navigate = useNavigate();
+  const [step, setStep] = useState<RegisterStep>(1);
+
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [birthDay, setBirthDay] = useState('');
+  const [birthMonth, setBirthMonth] = useState('');
+  const [birthYear, setBirthYear] = useState('');
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [agreedPersonalData, setAgreedPersonalData] = useState(false);
+  const [agreedTerms, setAgreedTerms] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const birthDate = useMemo(
+    () => normalizeBirthDate(birthDay, birthMonth, birthYear),
+    [birthDay, birthMonth, birthYear]
+  );
+
+  const isStep1Valid = firstName.trim().length >= 2 && lastName.trim().length >= 2;
+  const isStep2Valid = Boolean(birthDate);
+  const isStep3FieldsValid =
+    emailRegex.test(email) &&
+    password.length >= 6 &&
+    password === confirmPassword &&
+    agreedPersonalData &&
+    agreedTerms;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (step !== 3) return;
+
     setError(null);
     setInfo(null);
+    setIsSubmitting(true);
 
-    if (!emailRegex.test(email)) {
-      setError('Пожалуйста, введите корректный email.');
-      return;
-    }
+    try {
+      if (!isStep1Valid || !isStep2Valid || !isStep3FieldsValid || !birthDate) {
+        setError('Заполните корректно все поля и подтвердите оба соглашения.');
+        return;
+      }
 
-    if (password.length < 6) {
-      setError('Пароль должен содержать минимум 6 символов.');
-      return;
-    }
+      const supabase = getSupabaseClient();
 
-    if (password !== confirmPassword) {
-      setError('Пароли не совпадают.');
-      return;
-    }
+      if (!supabase) {
+        setError('Supabase не настроен. Проверьте переменные окружения.');
+        return;
+      }
 
-    const supabase = getSupabaseClient();
+      // Регистрация через Supabase Auth с метаданными для FinHub
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/email-verification`,
+          data: {
+            appName: 'FinHub',
+            senderName: 'FinHub Support',
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
+            birth_date: birthDate
+          }
+        }
+      });
 
-    if (!supabase) {
-      setError('Supabase не настроен. Проверьте переменные окружения.');
-      return;
-    }
+      if (signUpError) {
+        setError('Не удалось создать аккаунт. Попробуйте ещё раз.');
+        // eslint-disable-next-line no-console
+        console.error(signUpError);
+        return;
+      }
 
-    // Регистрация через Supabase Auth с метаданными для письма
-    const { error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/email-verification`,
-        data: {
-          appName: 'FinHub',
-          senderName: 'FinHub Support'
+      const userId = signUpData.user?.id;
+      if (userId) {
+        const { error: profileError } = await supabase.from('profiles').upsert(
+          {
+            user_id: userId,
+            first_name: firstName.trim(),
+            last_name: lastName.trim(),
+            birth_date: birthDate
+          },
+          { onConflict: 'user_id' }
+        );
+
+        if (profileError) {
+          // eslint-disable-next-line no-console
+          console.error(profileError);
+          setError(
+            'Аккаунт создан, но профиль не удалось сохранить в таблицу profiles. Проверьте структуру таблицы.'
+          );
+          return;
         }
       }
-    });
 
-    if (signUpError) {
-      setError('Не удалось создать аккаунт. Попробуйте ещё раз.');
-      // eslint-disable-next-line no-console
-      console.error(signUpError);
+      login(email, false);
+      setInfo('Добро пожаловать в FinHub! На вашу почту отправлено письмо для подтверждения.');
+      navigate('/email-verification');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const goNextStep = () => {
+    setError(null);
+    if (step === 1 && !isStep1Valid) {
+      setError('Введите имя и фамилию (минимум 2 символа).');
       return;
     }
+    if (step === 2 && !isStep2Valid) {
+      setError('Укажите корректную дату рождения.');
+      return;
+    }
+    setStep((prev) => (prev < 3 ? ((prev + 1) as RegisterStep) : prev));
+  };
 
-    login(email, false);
-    setInfo('Добро пожаловать в FinHub! На вашу почту отправлено письмо для подтверждения.');
-    navigate('/email-verification');
+  const goPrevStep = () => {
+    setError(null);
+    setStep((prev) => (prev > 1 ? ((prev - 1) as RegisterStep) : prev));
   };
 
   return (
     <AuthLayout
       title="Регистрация в FinHub"
-      subtitle="Создайте единый финансовый профиль перед подключением банков."
+      subtitle="Создайте безопасный профиль FinHub для управления счетами и транзакциями."
     >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-slate-300" htmlFor="email">
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            autoComplete="email"
-            className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="name@example.com"
-          />
+        <div className="grid grid-cols-3 gap-2">
+          {[1, 2, 3].map((s) => (
+            <div
+              key={s}
+              className={`rounded-full px-2 py-1 text-center text-[11px] font-medium transition ${
+                step === s
+                  ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/60'
+                  : step > s
+                    ? 'bg-slate-700/70 text-slate-200'
+                    : 'bg-slate-800/70 text-slate-400'
+              }`}
+            >
+              Шаг {s}
+            </div>
+          ))}
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-slate-300" htmlFor="password">
-            Пароль
-          </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="new-password"
-            className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Минимум 6 символов"
-          />
-        </div>
+        <AnimatePresence mode="wait">
+          {step === 1 && (
+            <motion.section
+              key="step-1"
+              initial={{ opacity: 0, x: 18 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -18 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300" htmlFor="firstName">
+                  Имя
+                </label>
+                <input
+                  id="firstName"
+                  type="text"
+                  autoComplete="given-name"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="Айдана"
+                />
+              </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-slate-300" htmlFor="passwordConfirm">
-            Подтверждение пароля
-          </label>
-          <input
-            id="passwordConfirm"
-            type="password"
-            autoComplete="new-password"
-            className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            placeholder="Повторите пароль"
-          />
-        </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300" htmlFor="lastName">
+                  Фамилия
+                </label>
+                <input
+                  id="lastName"
+                  type="text"
+                  autoComplete="family-name"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  placeholder="Сапарова"
+                />
+              </div>
+            </motion.section>
+          )}
+
+          {step === 2 && (
+            <motion.section
+              key="step-2"
+              initial={{ opacity: 0, x: 18 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -18 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300">Дата рождения</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    inputMode="numeric"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                    value={birthDay}
+                    onChange={(e) => setBirthDay(e.target.value)}
+                    placeholder="День"
+                  />
+                  <select
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                    value={birthMonth}
+                    onChange={(e) => setBirthMonth(e.target.value)}
+                  >
+                    <option value="">Месяц</option>
+                    {monthOptions.map((name, idx) => (
+                      <option key={name} value={idx + 1}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min={1900}
+                    max={new Date().getFullYear()}
+                    inputMode="numeric"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                    value={birthYear}
+                    onChange={(e) => setBirthYear(e.target.value)}
+                    placeholder="Год"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Дата нужна для подтверждения профиля и персонализации финансовых рекомендаций FinHub.
+                </p>
+              </div>
+            </motion.section>
+          )}
+
+          {step === 3 && (
+            <motion.section
+              key="step-3"
+              initial={{ opacity: 0, x: 18 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -18 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300" htmlFor="email">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300" htmlFor="password">
+                  Пароль
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  autoComplete="new-password"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Минимум 6 символов"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300" htmlFor="passwordConfirm">
+                  Подтверждение пароля
+                </label>
+                <input
+                  id="passwordConfirm"
+                  type="password"
+                  autoComplete="new-password"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Повторите пароль"
+                />
+              </div>
+
+              <div className="space-y-3 rounded-xl border border-slate-700/80 bg-slate-900/60 p-3">
+                <label className="flex items-start gap-2.5 text-[11px] text-slate-300">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-emerald-400 focus:ring-emerald-500"
+                    checked={agreedPersonalData}
+                    onChange={(e) => setAgreedPersonalData(e.target.checked)}
+                  />
+                  <span>
+                    Я даю согласие на обработку персональных данных и использование информации о
+                    моих финансовых транзакциях и банковских счетах для анализа и персонализации
+                    предложений в приложении FinHub.{' '}
+                    <a
+                      href="https://finhub.app/privacy"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-emerald-300 underline-offset-2 hover:text-emerald-200 hover:underline"
+                    >
+                      Политика конфиденциальности
+                    </a>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2.5 text-[11px] text-slate-300">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-emerald-400 focus:ring-emerald-500"
+                    checked={agreedTerms}
+                    onChange={(e) => setAgreedTerms(e.target.checked)}
+                  />
+                  <span>
+                    Я подтверждаю, что ознакомлен с условиями Пользовательского соглашения FinHub и
+                    Условиями безопасного подключения банковских API.{' '}
+                    <a
+                      href="https://finhub.app/terms"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-emerald-300 underline-offset-2 hover:text-emerald-200 hover:underline"
+                    >
+                      Пользовательское соглашение
+                    </a>
+                  </span>
+                </label>
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         {error && <p className="text-xs text-red-400">{error}</p>}
         {info && <p className="text-xs text-emerald-300">{info}</p>}
 
-        <button
-          type="submit"
-          className="mt-2 inline-flex w-full items-center justify-center rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 hover:shadow-emerald-400/50"
-        >
-          Продолжить к верификации
-        </button>
+        <div className="flex items-center gap-2 pt-1">
+          {step > 1 && (
+            <button
+              type="button"
+              onClick={goPrevStep}
+              className="inline-flex flex-1 items-center justify-center rounded-xl border border-slate-600 bg-slate-900/70 px-4 py-2.5 text-xs font-semibold text-slate-200 transition hover:border-slate-400 hover:bg-slate-800"
+            >
+              Назад
+            </button>
+          )}
+
+          {step < 3 ? (
+            <button
+              type="button"
+              onClick={goNextStep}
+              className="inline-flex flex-1 items-center justify-center rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 hover:shadow-emerald-400/50"
+            >
+              Далее
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!isStep1Valid || !isStep2Valid || !isStep3FieldsValid || isSubmitting}
+              className="inline-flex flex-1 items-center justify-center rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 hover:shadow-emerald-400/50 disabled:cursor-not-allowed disabled:bg-emerald-700/50 disabled:text-emerald-100 disabled:shadow-none"
+            >
+              {isSubmitting ? 'Регистрация...' : 'Зарегистрироваться'}
+            </button>
+          )}
+        </div>
 
         <p className="pt-2 text-center text-[11px] text-slate-400">
           Уже есть аккаунт?{' '}

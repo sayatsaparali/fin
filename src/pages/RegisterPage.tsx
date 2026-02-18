@@ -50,6 +50,8 @@ const normalizeBirthDate = (day: string, month: string, year: string): string | 
     .padStart(2, '0')}`;
 };
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const RegisterPage = () => {
   const { login } = useUser();
   const navigate = useNavigate();
@@ -97,6 +99,11 @@ const RegisterPage = () => {
         return;
       }
 
+      if (password !== confirmPassword) {
+        setError('Пароли не совпадают.');
+        return;
+      }
+
       const supabase = getSupabaseClient();
 
       if (!supabase) {
@@ -120,6 +127,13 @@ const RegisterPage = () => {
       });
 
       if (signUpError) {
+        // eslint-disable-next-line no-console
+        console.error('Supabase signUp error:', {
+          message: signUpError.message,
+          details: signUpError.details,
+          hint: signUpError.hint,
+          code: signUpError.code
+        });
         const isAlreadyRegistered =
           signUpError.message.toLowerCase().includes('already') ||
           signUpError.message.toLowerCase().includes('registered') ||
@@ -134,36 +148,7 @@ const RegisterPage = () => {
         return;
       }
 
-      const userId = signUpData.user?.id;
-      if (userId) {
-        const { error: profileError } = await supabase.from('profiles').upsert(
-          {
-            user_id: userId,
-            first_name: firstName.trim(),
-            last_name: lastName.trim(),
-            birth_date: birthDate
-          },
-          { onConflict: 'user_id' }
-        );
-
-        if (profileError) {
-          // eslint-disable-next-line no-console
-          console.log('Supabase profiles upsert error:', {
-            message: profileError.message,
-            details: profileError.details,
-            hint: profileError.hint,
-            code: profileError.code
-          });
-          // eslint-disable-next-line no-console
-          console.error(profileError);
-          setError(
-            'Аккаунт создан, но профиль не удалось сохранить в таблицу profiles. Проверьте структуру таблицы.'
-          );
-          return;
-        }
-      }
-
-      // Автоматический вход сразу после регистрации
+      // Автоматический вход сразу после регистрации (без окна подтверждения почты)
       let hasSession = Boolean(signUpData.session);
 
       if (!hasSession) {
@@ -173,6 +158,13 @@ const RegisterPage = () => {
         });
 
         if (signInError) {
+          // eslint-disable-next-line no-console
+          console.error('Supabase signInWithPassword after signUp error:', {
+            message: signInError.message,
+            details: signInError.details,
+            hint: signInError.hint,
+            code: signInError.code
+          });
           // eslint-disable-next-line no-console
           console.error(signInError);
           setError(
@@ -189,8 +181,44 @@ const RegisterPage = () => {
         return;
       }
 
+      // После успешного Auth пишем профиль (поля совпадают с колонками profiles)
+      const userId = signUpData.user?.id;
+      if (userId) {
+        try {
+          // Даем Supabase небольшую паузу, чтобы сессия успела полностью примениться
+          await wait(500);
+
+          const { error: profileError } = await supabase.from('profiles').upsert(
+            {
+              user_id: userId,
+              first_name: firstName.trim(),
+              last_name: lastName.trim(),
+              birth_date: birthDate
+            },
+            { onConflict: 'user_id' }
+          );
+
+          if (profileError) {
+            // eslint-disable-next-line no-console
+            console.error('Supabase profiles upsert error (non-blocking):', {
+              message: profileError.message,
+              details: profileError.details,
+              hint: profileError.hint,
+              code: profileError.code
+            });
+          }
+        } catch (profileUnexpectedError) {
+          // eslint-disable-next-line no-console
+          console.error('Unexpected profiles save error (non-blocking):', profileUnexpectedError);
+        }
+      }
+
       login(email, true);
       navigate('/dashboard');
+    } catch (unexpectedError) {
+      // eslint-disable-next-line no-console
+      console.error('Unexpected register flow error:', unexpectedError);
+      setError('Не удалось создать аккаунт. Попробуйте ещё раз.');
     } finally {
       setIsSubmitting(false);
     }

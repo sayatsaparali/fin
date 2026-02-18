@@ -10,8 +10,14 @@ import {
   YAxis
 } from 'recharts';
 import { useNavigate } from 'react-router-dom';
+import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
 import { useUser } from '../context/UserContext';
 import { fetchDashboardData, type DashboardData } from '../lib/financeApi';
+import {
+  fetchFavoriteContacts,
+  removeFavoriteContact,
+  type FavoriteContact
+} from '../lib/favoritesApi';
 import { getSupabaseClient } from '../lib/supabaseClient';
 import { getBankMeta, KZ_BANKS } from '../lib/banks';
 
@@ -31,6 +37,8 @@ const DashboardPage = () => {
   const [error, setError] = useState<string | null>(null);
 
   const [smartPocket, setSmartPocket] = useState(250000);
+  const [favoriteContacts, setFavoriteContacts] = useState<FavoriteContact[]>([]);
+  const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isAddBankModalOpen, setIsAddBankModalOpen] = useState(false);
   const [isCreatingBank, setIsCreatingBank] = useState(false);
@@ -84,17 +92,50 @@ const DashboardPage = () => {
       }
     };
 
+    const loadFavorites = async () => {
+      try {
+        setFavoritesLoading(true);
+        const favorites = await fetchFavoriteContacts();
+        if (!isMounted) return;
+        setFavoriteContacts(favorites);
+      } catch (favoritesError) {
+        if (!isMounted) return;
+        // eslint-disable-next-line no-console
+        console.error('Failed to load favorites on dashboard:', favoritesError);
+      } finally {
+        if (isMounted) setFavoritesLoading(false);
+      }
+    };
+
     load();
+    loadFavorites();
     const handleAccountsUpdated = () => {
       load();
     };
+    const handleFavoritesUpdated = () => {
+      loadFavorites();
+    };
     window.addEventListener('finhub:accounts-updated', handleAccountsUpdated);
+    window.addEventListener('finhub:favorites-updated', handleFavoritesUpdated);
 
     return () => {
       isMounted = false;
       window.removeEventListener('finhub:accounts-updated', handleAccountsUpdated);
+      window.removeEventListener('finhub:favorites-updated', handleFavoritesUpdated);
     };
   }, []);
+
+  const handleDeleteFavorite = async (favorite: FavoriteContact) => {
+    try {
+      await removeFavoriteContact(favorite.id);
+      setFavoriteContacts((prev) => prev.filter((item) => item.id !== favorite.id));
+      window.dispatchEvent(new Event('finhub:favorites-updated'));
+    } catch (deleteError) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to delete favorite:', deleteError);
+      setError('Не удалось удалить контакт из избранного.');
+    }
+  };
 
   const handleCreateBankAccount = async () => {
     setError(null);
@@ -332,6 +373,17 @@ const DashboardPage = () => {
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="glass-panel px-4 py-4 sm:px-6 sm:py-5">
+            <FrequentTransfersStrip
+              title="Частые переводы"
+              favorites={favoriteContacts}
+              loading={favoritesLoading}
+              onAdd={() => navigate('/transfers', { state: { openAddFavorite: true } })}
+              onSelect={(favorite) => navigate('/transfers', { state: { quickFavorite: favorite } })}
+              onDelete={handleDeleteFavorite}
+            />
           </div>
 
           {/* Smart Pocket */}

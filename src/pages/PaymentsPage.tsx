@@ -7,11 +7,22 @@ import {
   CheckCircle2,
   ContactRound,
   CreditCard,
+  Plus,
   QrCode,
-  SendHorizontal
+  SendHorizontal,
+  Star
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
 import { BankId, getBankMeta, KZ_BANKS, normalizeBankId } from '../lib/banks';
+import {
+  addFavoriteContact,
+  fetchFavoriteContacts,
+  removeFavoriteContact,
+  type FavoriteCategory,
+  type FavoriteContact,
+  type NewFavoriteContactInput
+} from '../lib/favoritesApi';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type TransferMethod = 'own' | 'phone' | 'card';
@@ -21,6 +32,11 @@ type ConnectedAccount = {
   id: string;
   bank: string;
   balance: number;
+};
+
+type TransferLocationState = {
+  quickFavorite?: FavoriteContact;
+  openAddFavorite?: boolean;
 };
 
 const formatCurrency = (value: number) =>
@@ -73,12 +89,16 @@ const formatCardValue = (input: string) =>
 
 const PaymentsPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const transferState = (location.state ?? null) as TransferLocationState | null;
 
   const [screen, setScreen] = useState<TransferScreen>('menu');
   const [method, setMethod] = useState<TransferMethod>('own');
 
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
+  const [favorites, setFavorites] = useState<FavoriteContact[]>([]);
+  const [favoritesLoading, setFavoritesLoading] = useState(false);
 
   const [fromAccountId, setFromAccountId] = useState<string>('');
   const [toAccountId, setToAccountId] = useState<string>('');
@@ -94,7 +114,16 @@ const PaymentsPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingFavorite, setIsSavingFavorite] = useState(false);
+  const [lastTransferDraft, setLastTransferDraft] = useState<NewFavoriteContactInput | null>(null);
   const [isQrOpen, setIsQrOpen] = useState(false);
+  const [isFavoriteModalOpen, setIsFavoriteModalOpen] = useState(false);
+
+  const [newFavoriteName, setNewFavoriteName] = useState('');
+  const [newFavoriteCategory, setNewFavoriteCategory] = useState<FavoriteCategory>('phone');
+  const [newFavoriteBankName, setNewFavoriteBankName] = useState(KZ_BANKS[0].name);
+  const [newFavoriteValue, setNewFavoriteValue] = useState('');
+  const [newFavoriteAvatar, setNewFavoriteAvatar] = useState('');
 
   const amountValue = Number(amount || 0);
 
@@ -159,6 +188,49 @@ const PaymentsPage = () => {
   }, []);
 
   useEffect(() => {
+    if (transferState?.quickFavorite) {
+      applyFavoriteTransfer(transferState.quickFavorite);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+
+    if (transferState?.openAddFavorite) {
+      setIsFavoriteModalOpen(true);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.pathname, navigate, transferState]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadFavorites = async () => {
+      try {
+        setFavoritesLoading(true);
+        const data = await fetchFavoriteContacts();
+        if (!isMounted) return;
+        setFavorites(data);
+      } catch (favoritesError) {
+        if (!isMounted) return;
+        // eslint-disable-next-line no-console
+        console.error('Failed to load favorites on transfers:', favoritesError);
+      } finally {
+        if (isMounted) setFavoritesLoading(false);
+      }
+    };
+
+    loadFavorites();
+
+    const refreshHandler = () => {
+      loadFavorites();
+    };
+    window.addEventListener('finhub:favorites-updated', refreshHandler);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('finhub:favorites-updated', refreshHandler);
+    };
+  }, []);
+
+  useEffect(() => {
     let isMounted = true;
 
     const loadMonthlySmpVolume = async () => {
@@ -217,6 +289,101 @@ const PaymentsPage = () => {
   const destinationAccount = accounts.find((account) => account.id === toAccountId) ?? null;
 
   const sourceBankId = normalizeBankId(sourceAccount?.bank);
+
+  const applyFavoriteTransfer = (favorite: FavoriteContact) => {
+    setError(null);
+
+    const targetBankId = normalizeBankId(favorite.bank_name);
+    setRecipientBankId(targetBankId === 'unknown' ? 'halyk' : targetBankId);
+
+    if (favorite.category === 'card') {
+      setMethod('card');
+      setCardNumber(formatCardValue(favorite.phone_number));
+    } else if (favorite.category === 'own') {
+      setMethod('own');
+    } else {
+      setMethod('phone');
+      setPhone(formatPhoneValue(favorite.phone_number));
+    }
+
+    setComment(`Перевод: ${favorite.name}`);
+    setAmount('');
+    setScreen('form');
+  };
+
+  const handleCreateFavorite = async () => {
+    const normalizedValue =
+      newFavoriteCategory === 'card'
+        ? newFavoriteValue.replace(/\D/g, '').slice(0, 16)
+        : `+7${newFavoriteValue.replace(/\D/g, '').slice(-10)}`;
+
+    if (!newFavoriteName.trim()) {
+      setError('Введите имя контакта.');
+      return;
+    }
+
+    if (newFavoriteCategory === 'card' && normalizedValue.length !== 16) {
+      setError('Введите корректный номер карты из 16 цифр.');
+      return;
+    }
+
+    if (newFavoriteCategory === 'phone' && normalizedValue.length < 12) {
+      setError('Введите корректный номер телефона.');
+      return;
+    }
+
+    try {
+      const created = await addFavoriteContact({
+        name: newFavoriteName.trim(),
+        phone_number: normalizedValue,
+        bank_name: newFavoriteBankName,
+        avatar_url: newFavoriteAvatar.trim() || null,
+        category: newFavoriteCategory
+      });
+      setFavorites((prev) => [created, ...prev]);
+      window.dispatchEvent(new Event('finhub:favorites-updated'));
+      setIsFavoriteModalOpen(false);
+      setNewFavoriteName('');
+      setNewFavoriteValue('');
+      setNewFavoriteAvatar('');
+      setNewFavoriteCategory('phone');
+      setError(null);
+    } catch (createError) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to create favorite:', createError);
+      setError('Не удалось добавить контакт в избранное.');
+    }
+  };
+
+  const handleDeleteFavorite = async (favorite: FavoriteContact) => {
+    try {
+      await removeFavoriteContact(favorite.id);
+      setFavorites((prev) => prev.filter((item) => item.id !== favorite.id));
+      window.dispatchEvent(new Event('finhub:favorites-updated'));
+    } catch (deleteError) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to delete favorite:', deleteError);
+      setError('Не удалось удалить контакт из избранного.');
+    }
+  };
+
+  const saveLastTransferToFavorites = async () => {
+    if (!lastTransferDraft) return;
+    try {
+      setIsSavingFavorite(true);
+      const created = await addFavoriteContact(lastTransferDraft);
+      setFavorites((prev) => [created, ...prev]);
+      window.dispatchEvent(new Event('finhub:favorites-updated'));
+      setSuccessMessage('Контакт добавлен в избранное.');
+      setLastTransferDraft(null);
+    } catch (saveError) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to save transfer to favorites:', saveError);
+      setError('Не удалось сохранить контакт в избранном.');
+    } finally {
+      setIsSavingFavorite(false);
+    }
+  };
 
   const commission = useMemo(() => {
     if (amountValue <= 0) return 0;
@@ -355,6 +522,28 @@ const PaymentsPage = () => {
         `Перевод успешно выполнен. Списано ${formatCurrency(totalDebit).replace('KZT', '₸')}.`
       );
       setScreen('success');
+      if (method === 'phone' || method === 'card') {
+        const draftValue =
+          method === 'phone'
+            ? `+7${getPhoneDigits(phone)}`
+            : cardNumber.replace(/\D/g, '').slice(0, 16);
+
+        if (draftValue) {
+          const recipientMeta = KZ_BANKS.find((bank) => bank.id === recipientBankId);
+          setLastTransferDraft({
+            name:
+              method === 'phone'
+                ? `Контакт ${phone.slice(-4)}`
+                : `Карта ${draftValue.slice(-4)}`,
+            phone_number: draftValue,
+            bank_name: recipientMeta?.name ?? destinationBankMeta.name,
+            avatar_url: null,
+            category: method
+          });
+        }
+      } else {
+        setLastTransferDraft(null);
+      }
 
       setAmount('');
       setComment('');
@@ -398,59 +587,70 @@ const PaymentsPage = () => {
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
-              className="grid gap-3 sm:grid-cols-2"
+              className="space-y-4"
             >
-              <button
-                type="button"
-                onClick={() => openMethodForm('own')}
-                className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
-                  <ArrowRightLeft size={18} />
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-slate-100">Между своими счетами</p>
-                </div>
-              </button>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => openMethodForm('own')}
+                  className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
+                    <ArrowRightLeft size={18} />
+                  </span>
+                  <div>
+                    <p className="text-sm font-medium text-slate-100">Между своими счетами</p>
+                  </div>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => openMethodForm('phone')}
-                className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-500/20 text-sky-300">
-                  <ContactRound size={18} />
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-slate-100">По номеру телефона</p>
-                </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => openMethodForm('phone')}
+                  className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-500/20 text-sky-300">
+                    <ContactRound size={18} />
+                  </span>
+                  <div>
+                    <p className="text-sm font-medium text-slate-100">По номеру телефона</p>
+                  </div>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => openMethodForm('card')}
-                className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-300">
-                  <CreditCard size={18} />
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-slate-100">По номеру карты</p>
-                </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => openMethodForm('card')}
+                  className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-300">
+                    <CreditCard size={18} />
+                  </span>
+                  <div>
+                    <p className="text-sm font-medium text-slate-100">По номеру карты</p>
+                  </div>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setIsQrOpen(true)}
-                className="flex items-center gap-3 rounded-2xl border border-emerald-400/50 bg-emerald-500/10 p-4 text-left transition hover:bg-emerald-500/15"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
-                  <QrCode size={18} />
-                </span>
-                <div>
-                  <p className="text-sm font-semibold text-emerald-200">FinHub QR</p>
-                </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setIsQrOpen(true)}
+                  className="flex items-center gap-3 rounded-2xl border border-emerald-400/50 bg-emerald-500/10 p-4 text-left transition hover:bg-emerald-500/15"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
+                    <QrCode size={18} />
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-emerald-200">FinHub QR</p>
+                  </div>
+                </button>
+              </div>
+
+              <FrequentTransfersStrip
+                title="Частые переводы"
+                favorites={favorites}
+                loading={favoritesLoading}
+                onAdd={() => setIsFavoriteModalOpen(true)}
+                onSelect={applyFavoriteTransfer}
+                onDelete={handleDeleteFavorite}
+              />
             </motion.section>
           )}
 
@@ -706,6 +906,17 @@ const PaymentsPage = () => {
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+                {lastTransferDraft && (
+                  <button
+                    type="button"
+                    onClick={saveLastTransferToFavorites}
+                    disabled={isSavingFavorite}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300/50 bg-amber-400/10 px-4 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Star size={14} />
+                    {isSavingFavorite ? 'Сохранение...' : 'Добавить в избранное'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => navigate('/dashboard')}
@@ -718,6 +929,7 @@ const PaymentsPage = () => {
                   onClick={() => {
                     setError(null);
                     setSuccessMessage('');
+                    setLastTransferDraft(null);
                     setScreen('menu');
                   }}
                   className="rounded-xl border border-slate-600 bg-slate-900/70 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-400"
@@ -729,6 +941,134 @@ const PaymentsPage = () => {
           )}
         </AnimatePresence>
       </section>
+
+      <AnimatePresence>
+        {isFavoriteModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4"
+          >
+            <motion.div
+              initial={{ scale: 0.94, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="glass-panel w-full max-w-md p-4 sm:p-5"
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-100">Новый избранный контакт</p>
+                <button
+                  type="button"
+                  onClick={() => setIsFavoriteModalOpen(false)}
+                  className="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300"
+                >
+                  Закрыть
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400">Имя контакта</label>
+                  <input
+                    type="text"
+                    value={newFavoriteName}
+                    onChange={(e) => setNewFavoriteName(e.target.value)}
+                    placeholder="Например, Арман"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400">Тип контакта</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewFavoriteCategory('phone')}
+                      className={`rounded-xl px-3 py-2 text-xs transition ${
+                        newFavoriteCategory === 'phone'
+                          ? 'border border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                          : 'border border-slate-700 bg-slate-900/70 text-slate-300'
+                      }`}
+                    >
+                      По телефону
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewFavoriteCategory('card')}
+                      className={`rounded-xl px-3 py-2 text-xs transition ${
+                        newFavoriteCategory === 'card'
+                          ? 'border border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                          : 'border border-slate-700 bg-slate-900/70 text-slate-300'
+                      }`}
+                    >
+                      По карте
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400">
+                    {newFavoriteCategory === 'card' ? 'Номер карты' : 'Номер телефона'}
+                  </label>
+                  <input
+                    type="text"
+                    value={newFavoriteValue}
+                    onChange={(e) =>
+                      setNewFavoriteValue(
+                        newFavoriteCategory === 'card'
+                          ? formatCardValue(e.target.value)
+                          : formatPhoneValue(e.target.value)
+                      )
+                    }
+                    placeholder={
+                      newFavoriteCategory === 'card'
+                        ? '0000 0000 0000 0000'
+                        : '+7 (7xx) xxx-xx-xx'
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400">Банк</label>
+                  <select
+                    value={newFavoriteBankName}
+                    onChange={(e) => setNewFavoriteBankName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  >
+                    {KZ_BANKS.map((bank) => (
+                      <option key={bank.id} value={bank.name}>
+                        {bank.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400">URL аватарки (необязательно)</label>
+                  <input
+                    type="url"
+                    value={newFavoriteAvatar}
+                    onChange={(e) => setNewFavoriteAvatar(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCreateFavorite}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400"
+                >
+                  <Plus size={16} />
+                  Добавить контакт
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isQrOpen && (

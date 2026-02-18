@@ -42,13 +42,14 @@ function App() {
           }
         />
         <Route
-          path="/payments"
+          path="/transfers"
           element={
             <ProtectedRoute>
               <PaymentsPage />
             </ProtectedRoute>
           }
         />
+        <Route path="/payments" element={<Navigate to="/transfers" replace />} />
         <Route
           path="/profile"
           element={

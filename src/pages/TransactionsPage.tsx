@@ -24,10 +24,10 @@ const formatDateTime = (value: string) => {
 };
 
 const getTransactionLabel = (tx: DashboardTransaction) =>
-  tx.counterparty ?? tx.description ?? 'Операция';
+  tx.counterparty ?? tx.category ?? 'Операция';
 
 const getTransactionIcon = (tx: DashboardTransaction): { badge: string; tone: string } => {
-  const label = getTransactionLabel(tx).toLowerCase();
+  const label = (tx.category ?? tx.counterparty ?? '').toLowerCase();
 
   if (label.includes('taxi') || label.includes('yandex')) {
     return { badge: 'TX', tone: 'bg-sky-500/20 text-sky-300' };
@@ -41,8 +41,8 @@ const getTransactionIcon = (tx: DashboardTransaction): { badge: string; tone: st
   if (label.includes('app store')) {
     return { badge: 'AP', tone: 'bg-indigo-500/20 text-indigo-300' };
   }
-  if (tx.type === 'income') return { badge: 'IN', tone: 'bg-emerald-500/20 text-emerald-300' };
-  if (tx.type === 'expense') return { badge: 'EX', tone: 'bg-rose-500/20 text-rose-300' };
+  if (tx.kind === 'income') return { badge: 'IN', tone: 'bg-emerald-500/20 text-emerald-300' };
+  if (tx.kind === 'expense') return { badge: 'EX', tone: 'bg-rose-500/20 text-rose-300' };
   return { badge: 'TR', tone: 'bg-slate-600/30 text-slate-300' };
 };
 
@@ -94,8 +94,8 @@ const TransactionsPage = () => {
       <section className="glass-panel mt-4 px-3 py-3 sm:px-5 sm:py-4">
         <div className="max-h-[70vh] space-y-1.5 overflow-y-auto pr-1">
           {transactions.map((tx) => {
-            const isIncome = tx.type === 'income';
-            const isExpense = tx.type === 'expense';
+            const isIncome = tx.kind === 'income';
+            const isExpense = tx.kind === 'expense';
             const icon = getTransactionIcon(tx);
             const amountColor = isIncome
               ? 'text-emerald-300'
@@ -121,7 +121,7 @@ const TransactionsPage = () => {
                       {getTransactionLabel(tx)}
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-slate-400">
-                      {formatDateTime(tx.occurredAt)} • {tx.bank ?? 'Без счёта'}
+                      {formatDateTime(tx.date)} • {tx.category ?? 'Без категории'}
                     </p>
                   </div>
 

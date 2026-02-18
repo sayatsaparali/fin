@@ -68,7 +68,6 @@ const RegisterPage = () => {
   const [agreedTerms, setAgreedTerms] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const birthDate = useMemo(
@@ -90,7 +89,6 @@ const RegisterPage = () => {
     if (step !== 3) return;
 
     setError(null);
-    setInfo(null);
     setIsSubmitting(true);
 
     try {
@@ -111,7 +109,6 @@ const RegisterPage = () => {
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/email-verification`,
           data: {
             appName: 'FinHub',
             senderName: 'FinHub Support',
@@ -123,7 +120,15 @@ const RegisterPage = () => {
       });
 
       if (signUpError) {
-        setError('Не удалось создать аккаунт. Попробуйте ещё раз.');
+        const isAlreadyRegistered =
+          signUpError.message.toLowerCase().includes('already') ||
+          signUpError.message.toLowerCase().includes('registered') ||
+          signUpError.message.toLowerCase().includes('exists');
+        setError(
+          isAlreadyRegistered
+            ? 'Этот email уже зарегистрирован. Используйте вход в FinHub.'
+            : 'Не удалось создать аккаунт. Проверьте данные и попробуйте ещё раз.'
+        );
         // eslint-disable-next-line no-console
         console.error(signUpError);
         return;
@@ -143,6 +148,13 @@ const RegisterPage = () => {
 
         if (profileError) {
           // eslint-disable-next-line no-console
+          console.log('Supabase profiles upsert error:', {
+            message: profileError.message,
+            details: profileError.details,
+            hint: profileError.hint,
+            code: profileError.code
+          });
+          // eslint-disable-next-line no-console
           console.error(profileError);
           setError(
             'Аккаунт создан, но профиль не удалось сохранить в таблицу profiles. Проверьте структуру таблицы.'
@@ -151,9 +163,34 @@ const RegisterPage = () => {
         }
       }
 
-      login(email, false);
-      setInfo('Добро пожаловать в FinHub! На вашу почту отправлено письмо для подтверждения.');
-      navigate('/email-verification');
+      // Автоматический вход сразу после регистрации
+      let hasSession = Boolean(signUpData.session);
+
+      if (!hasSession) {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+
+        if (signInError) {
+          // eslint-disable-next-line no-console
+          console.error(signInError);
+          setError(
+            'Аккаунт создан, но не удалось выполнить автоматический вход. Войдите вручную на странице входа.'
+          );
+          return;
+        }
+
+        hasSession = true;
+      }
+
+      if (!hasSession) {
+        setError('Не удалось открыть сессию пользователя. Попробуйте войти вручную.');
+        return;
+      }
+
+      login(email, true);
+      navigate('/dashboard');
     } finally {
       setIsSubmitting(false);
     }
@@ -397,7 +434,6 @@ const RegisterPage = () => {
         </AnimatePresence>
 
         {error && <p className="text-xs text-red-400">{error}</p>}
-        {info && <p className="text-xs text-emerald-300">{info}</p>}
 
         <div className="flex items-center gap-2 pt-1">
           {step > 1 && (

@@ -17,11 +17,10 @@ export type DashboardData = {
 export type DashboardTransaction = {
   id: string;
   amount: number;
-  type: 'income' | 'expense' | 'transfer' | 'other';
-  occurredAt: string;
-  description: string | null;
+  category: string | null;
   counterparty: string | null;
-  bank: string | null;
+  date: string;
+  kind: 'income' | 'expense' | 'other';
 };
 
 const weekdayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] as const;
@@ -154,33 +153,60 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const monthAgo = new Date();
   monthAgo.setDate(monthAgo.getDate() - 30);
 
-  const { data: transactions, error: txError } = await supabase
+  // Primary schema used by Transactions page: amount, category, counterparty, date
+  const { data: transactionsByNewSchema, error: txNewSchemaError } = await supabase
     .from('transactions')
-    .select('id, amount, type, occurred_at, description, counterparty, bank')
+    .select('id, amount, category, counterparty, date')
+    .eq('user_id', user.id)
+    .gte('date', monthAgo.toISOString())
+    .order('date', { ascending: false })
+    .limit(120);
+
+  if (!txNewSchemaError) {
+    return (transactionsByNewSchema ?? []).map((tx) => {
+      const amount = Number(tx.amount ?? 0);
+      const category = tx.category ? String(tx.category) : null;
+      const counterparty = tx.counterparty ? String(tx.counterparty) : null;
+      const kind: DashboardTransaction['kind'] = amount < 0 ? 'expense' : 'income';
+
+      return {
+        id: String(tx.id ?? crypto.randomUUID()),
+        amount,
+        category,
+        counterparty,
+        date: String(tx.date ?? ''),
+        kind
+      };
+    });
+  }
+
+  // Fallback for previous schema (type/description/occurred_at/bank) to avoid runtime errors
+  // eslint-disable-next-line no-console
+  console.log('Transactions new schema query failed, fallback applied:', txNewSchemaError.message);
+  const { data: transactionsLegacy, error: txLegacyError } = await supabase
+    .from('transactions')
+    .select('id, amount, type, description, counterparty, occurred_at, bank')
     .eq('user_id', user.id)
     .gte('occurred_at', monthAgo.toISOString())
     .order('occurred_at', { ascending: false })
     .limit(120);
 
-  if (txError) {
-    throw txError;
+  if (txLegacyError) {
+    throw txLegacyError;
   }
 
-  return (transactions ?? []).map((tx) => {
+  return (transactionsLegacy ?? []).map((tx) => {
     const rawType = String(tx.type ?? 'other').toLowerCase();
-    const normalizedType: DashboardTransaction['type'] =
-      rawType === 'income' || rawType === 'expense' || rawType === 'transfer'
-        ? rawType
-        : 'other';
-
+    const kind: DashboardTransaction['kind'] =
+      rawType === 'income' ? 'income' : rawType === 'expense' ? 'expense' : 'other';
+    const category = tx.description ? String(tx.description) : tx.bank ? String(tx.bank) : null;
     return {
       id: String(tx.id ?? crypto.randomUUID()),
       amount: Number(tx.amount ?? 0),
-      type: normalizedType,
-      occurredAt: String(tx.occurred_at ?? ''),
-      description: tx.description ? String(tx.description) : null,
+      category,
       counterparty: tx.counterparty ? String(tx.counterparty) : null,
-      bank: tx.bank ? String(tx.bank) : null
+      date: String(tx.occurred_at ?? ''),
+      kind
     };
   });
 };

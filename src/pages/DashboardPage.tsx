@@ -79,9 +79,14 @@ const DashboardPage = () => {
     };
 
     load();
+    const handleAccountsUpdated = () => {
+      load();
+    };
+    window.addEventListener('finhub:accounts-updated', handleAccountsUpdated);
 
     return () => {
       isMounted = false;
+      window.removeEventListener('finhub:accounts-updated', handleAccountsUpdated);
     };
   }, []);
 

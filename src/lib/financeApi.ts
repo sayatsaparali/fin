@@ -8,10 +8,14 @@ export type DailyAnalyticsPoint = {
 
 export type DashboardData = {
   totalBalance: number;
-  kaspiBalance: number;
-  freedomBalance: number;
-  halykBalance: number;
+  accounts: DashboardAccount[];
   analytics: DailyAnalyticsPoint[];
+};
+
+export type DashboardAccount = {
+  id: string;
+  bank: string;
+  balance: number;
 };
 
 export type DashboardTransaction = {
@@ -27,9 +31,11 @@ const weekdayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] a
 
 const buildFallbackData = (): DashboardData => ({
   totalBalance: 3250000,
-  kaspiBalance: 1425000,
-  freedomBalance: 980000,
-  halykBalance: 845000,
+  accounts: [
+    { id: 'demo-kaspi', bank: 'Kaspi.kz', balance: 1425000 },
+    { id: 'demo-halyk', bank: 'Halyk Bank', balance: 845000 },
+    { id: 'demo-freedom', bank: 'Freedom Bank', balance: 980000 }
+  ],
   analytics: [
     { name: 'Пн', income: 180000, expense: 120000 },
     { name: 'Вт', income: 160000, expense: 140000 },
@@ -61,27 +67,20 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   // 1. Счета пользователя по банкам
   const { data: accounts, error: accountsError } = await supabase
     .from('accounts')
-    .select('bank, balance')
+    .select('id, bank, balance')
     .eq('user_id', user.id);
 
   if (accountsError) {
     throw accountsError;
   }
 
-  let kaspiBalance = 0;
-  let freedomBalance = 0;
-  let halykBalance = 0;
+  const normalizedAccounts: DashboardAccount[] = (accounts ?? []).map((acc) => ({
+    id: String(acc.id ?? crypto.randomUUID()),
+    bank: String(acc.bank ?? 'Bank account'),
+    balance: Number(acc.balance ?? 0)
+  }));
 
-  (accounts ?? []).forEach((acc) => {
-    const bank = String(acc.bank ?? '').toLowerCase();
-    const balance = Number(acc.balance ?? 0);
-
-    if (bank === 'kaspi' || bank === 'kaspi gold') kaspiBalance += balance;
-    if (bank === 'freedom' || bank === 'freedom bank') freedomBalance += balance;
-    if (bank === 'halyk') halykBalance += balance;
-  });
-
-  const totalBalance = kaspiBalance + freedomBalance + halykBalance;
+  const totalBalance = normalizedAccounts.reduce((acc, item) => acc + item.balance, 0);
 
   // 2. Транзакции за последнюю неделю для аналитики
   const now = new Date();
@@ -130,9 +129,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
 
   return {
     totalBalance,
-    kaspiBalance,
-    freedomBalance,
-    halykBalance,
+    accounts: normalizedAccounts,
     analytics
   };
 };

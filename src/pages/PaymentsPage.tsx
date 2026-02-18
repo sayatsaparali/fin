@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRightLeft,
@@ -11,24 +11,17 @@ import {
   SendHorizontal
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { BankId, getBankMeta, KZ_BANKS, normalizeBankId } from '../lib/banks';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type TransferMethod = 'own' | 'phone' | 'card';
 type TransferScreen = 'menu' | 'form' | 'success';
 
-type BankOption = {
-  id: 'Kaspi' | 'Halyk' | 'Freedom' | 'BCC';
-  name: string;
-  logo: string;
-  tone: string;
+type ConnectedAccount = {
+  id: string;
+  bank: string;
+  balance: number;
 };
-
-const bankOptions: BankOption[] = [
-  { id: 'Kaspi', name: 'Kaspi', logo: 'K', tone: 'bg-rose-500/20 text-rose-300' },
-  { id: 'Halyk', name: 'Halyk', logo: 'H', tone: 'bg-emerald-500/20 text-emerald-300' },
-  { id: 'Freedom', name: 'Freedom', logo: 'F', tone: 'bg-lime-500/20 text-lime-300' },
-  { id: 'BCC', name: 'BCC', logo: 'B', tone: 'bg-sky-500/20 text-sky-300' }
-];
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('ru-KZ', {
@@ -84,14 +77,19 @@ const PaymentsPage = () => {
   const [screen, setScreen] = useState<TransferScreen>('menu');
   const [method, setMethod] = useState<TransferMethod>('own');
 
-  const [fromBank, setFromBank] = useState<BankOption['id']>('Kaspi');
-  const [toBank, setToBank] = useState<BankOption['id']>('Halyk');
-  const [targetBank, setTargetBank] = useState<BankOption['id']>('Halyk');
+  const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+
+  const [fromAccountId, setFromAccountId] = useState<string>('');
+  const [toAccountId, setToAccountId] = useState<string>('');
+  const [recipientBankId, setRecipientBankId] = useState<BankId>('halyk');
 
   const [phone, setPhone] = useState('+7');
   const [cardNumber, setCardNumber] = useState('');
   const [amount, setAmount] = useState('');
   const [comment, setComment] = useState('');
+
+  const [monthlySmpUsed, setMonthlySmpUsed] = useState(0);
 
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
@@ -100,14 +98,161 @@ const PaymentsPage = () => {
 
   const amountValue = Number(amount || 0);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadAccounts = async () => {
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+
+      try {
+        setAccountsLoading(true);
+        const {
+          data: { user },
+          error: userError
+        } = await supabase.auth.getUser();
+
+        if (userError || !user) {
+          throw userError ?? new Error('Пользователь не найден.');
+        }
+
+        const { data: rows, error: accountsError } = await supabase
+          .from('accounts')
+          .select('id, bank, balance')
+          .eq('user_id', user.id)
+          .order('bank', { ascending: true });
+
+        if (accountsError) {
+          throw accountsError;
+        }
+
+        if (!isMounted) return;
+
+        const normalized: ConnectedAccount[] = (rows ?? []).map((row) => ({
+          id: String(row.id),
+          bank: String(row.bank ?? 'Bank'),
+          balance: Number(row.balance ?? 0)
+        }));
+
+        setAccounts(normalized);
+        setFromAccountId((prev) => prev || normalized[0]?.id || '');
+        setToAccountId((prev) => prev || normalized[1]?.id || normalized[0]?.id || '');
+      } catch (loadError) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to load accounts for transfers:', loadError);
+      } finally {
+        if (isMounted) setAccountsLoading(false);
+      }
+    };
+
+    loadAccounts();
+
+    const refreshHandler = () => {
+      loadAccounts();
+    };
+
+    window.addEventListener('finhub:accounts-updated', refreshHandler);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('finhub:accounts-updated', refreshHandler);
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMonthlySmpVolume = async () => {
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+
+      try {
+        const {
+          data: { user }
+        } = await supabase.auth.getUser();
+
+        if (!user) return;
+
+        const monthStart = new Date();
+        monthStart.setDate(1);
+        monthStart.setHours(0, 0, 0, 0);
+
+        const { data: newSchemaData, error: newSchemaError } = await supabase
+          .from('transactions')
+          .select('amount')
+          .eq('user_id', user.id)
+          .eq('category', 'SMP_PHONE_TRANSFER')
+          .gte('date', monthStart.toISOString());
+
+        if (!newSchemaError) {
+          const total = (newSchemaData ?? []).reduce((acc, row) => acc + Math.abs(Number(row.amount ?? 0)), 0);
+          if (isMounted) setMonthlySmpUsed(total);
+          return;
+        }
+
+        const { data: legacyData, error: legacyError } = await supabase
+          .from('transactions')
+          .select('amount')
+          .eq('user_id', user.id)
+          .eq('description', 'SMP_PHONE_TRANSFER')
+          .gte('occurred_at', monthStart.toISOString());
+
+        if (legacyError) throw legacyError;
+
+        const total = (legacyData ?? []).reduce((acc, row) => acc + Math.abs(Number(row.amount ?? 0)), 0);
+        if (isMounted) setMonthlySmpUsed(total);
+      } catch (volumeError) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to load monthly SMP volume:', volumeError);
+      }
+    };
+
+    loadMonthlySmpVolume();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const sourceAccount = accounts.find((account) => account.id === fromAccountId) ?? null;
+  const destinationAccount = accounts.find((account) => account.id === toAccountId) ?? null;
+
+  const sourceBankId = normalizeBankId(sourceAccount?.bank);
+
   const commission = useMemo(() => {
     if (amountValue <= 0) return 0;
-    if (method === 'own') return 0;
-    if (method === 'phone') return 500;
-    return Math.round(amountValue * 0.0095);
-  }, [amountValue, method]);
+
+    if (method === 'own') {
+      return 0;
+    }
+
+    if (method === 'phone') {
+      if (sourceBankId === recipientBankId) return 0;
+      const projectedMonthVolume = monthlySmpUsed + amountValue;
+      if (projectedMonthVolume <= 500000) return 0;
+      return Math.max(Math.round(amountValue * 0.005), 250);
+    }
+
+    if (sourceBankId === recipientBankId) {
+      return 0;
+    }
+
+    if (sourceBankId === 'kaspi') {
+      return Math.max(Math.round(amountValue * 0.0095), 200);
+    }
+
+    if (sourceBankId === 'halyk') {
+      return amountValue <= 40000 ? 150 : Math.round(amountValue * 0.0095);
+    }
+
+    if (sourceBankId === 'bcc' || sourceBankId === 'freedom') {
+      return Math.max(Math.round(amountValue * 0.007), 250);
+    }
+
+    return Math.max(Math.round(amountValue * 0.007), 250);
+  }, [amountValue, method, sourceBankId, recipientBankId, monthlySmpUsed]);
 
   const totalDebit = Math.max(0, amountValue + commission);
+  const insufficientFunds = Boolean(sourceAccount && totalDebit > sourceAccount.balance);
 
   const openMethodForm = (nextMethod: TransferMethod) => {
     setMethod(nextMethod);
@@ -115,18 +260,36 @@ const PaymentsPage = () => {
     setScreen('form');
   };
 
+  const commissionText = commission === 0 ? 'Без комиссии' : `Комиссия: ${formatCurrency(commission).replace('KZT', '₸')}`;
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (!sourceAccount) {
+      setError('Выберите счет списания.');
+      return;
+    }
 
     if (amountValue <= 0) {
       setError('Введите сумму перевода больше 0.');
       return;
     }
 
-    if (method === 'own' && fromBank === toBank) {
-      setError('Для перевода между своими счетами выберите разные банки.');
+    if (insufficientFunds) {
+      setError('Недостаточно средств');
       return;
+    }
+
+    if (method === 'own') {
+      if (!destinationAccount) {
+        setError('Выберите счет зачисления.');
+        return;
+      }
+      if (sourceAccount.id === destinationAccount.id) {
+        setError('Для перевода между своими счетами выберите разные счета.');
+        return;
+      }
     }
 
     if (method === 'phone' && getPhoneDigits(phone).length !== 10) {
@@ -148,53 +311,17 @@ const PaymentsPage = () => {
     setIsSubmitting(true);
 
     try {
-      const {
-        data: { user },
-        error: userError
-      } = await supabase.auth.getUser();
+      const sourceNewBalance = sourceAccount.balance - totalDebit;
 
-      if (userError || !user) {
-        throw userError ?? new Error('Пользователь не найден.');
-      }
-
-      const { data: sourceAccount, error: sourceError } = await supabase
+      const { error: updateSourceError } = await supabase
         .from('accounts')
-        .select('id, balance, bank')
-        .eq('user_id', user.id)
-        .eq('bank', fromBank)
-        .maybeSingle();
+        .update({ balance: sourceNewBalance })
+        .eq('id', sourceAccount.id);
 
-      if (sourceError || !sourceAccount) {
-        throw sourceError ?? new Error(`Счет ${fromBank} не найден.`);
-      }
+      if (updateSourceError) throw updateSourceError;
 
-      const sourceBalance = Number(sourceAccount.balance ?? 0);
-      if (sourceBalance < totalDebit) {
-        setError('Недостаточно средств на выбранном счете.');
-        return;
-      }
-
-      if (method === 'own') {
-        const { data: destinationAccount, error: destinationError } = await supabase
-          .from('accounts')
-          .select('id, balance, bank')
-          .eq('user_id', user.id)
-          .eq('bank', toBank)
-          .maybeSingle();
-
-        if (destinationError || !destinationAccount) {
-          throw destinationError ?? new Error(`Счет ${toBank} не найден.`);
-        }
-
-        const sourceNewBalance = sourceBalance - totalDebit;
-        const destinationNewBalance = Number(destinationAccount.balance ?? 0) + amountValue;
-
-        const { error: updateSourceError } = await supabase
-          .from('accounts')
-          .update({ balance: sourceNewBalance })
-          .eq('id', sourceAccount.id);
-
-        if (updateSourceError) throw updateSourceError;
+      if (method === 'own' && destinationAccount) {
+        const destinationNewBalance = destinationAccount.balance + amountValue;
 
         const { error: updateDestinationError } = await supabase
           .from('accounts')
@@ -202,17 +329,28 @@ const PaymentsPage = () => {
           .eq('id', destinationAccount.id);
 
         if (updateDestinationError) throw updateDestinationError;
-      } else {
-        const sourceNewBalance = sourceBalance - totalDebit;
-        const { error: updateSourceError } = await supabase
-          .from('accounts')
-          .update({ balance: sourceNewBalance })
-          .eq('id', sourceAccount.id);
 
-        if (updateSourceError) throw updateSourceError;
+        setAccounts((prev) =>
+          prev.map((account) => {
+            if (account.id === sourceAccount.id) return { ...account, balance: sourceNewBalance };
+            if (account.id === destinationAccount.id) return { ...account, balance: destinationNewBalance };
+            return account;
+          })
+        );
+      } else {
+        setAccounts((prev) =>
+          prev.map((account) =>
+            account.id === sourceAccount.id ? { ...account, balance: sourceNewBalance } : account
+          )
+        );
+      }
+
+      if (method === 'phone' && sourceBankId !== recipientBankId) {
+        setMonthlySmpUsed((prev) => prev + amountValue);
       }
 
       window.dispatchEvent(new Event('finhub:accounts-updated'));
+
       setSuccessMessage(
         `Перевод успешно выполнен. Списано ${formatCurrency(totalDebit).replace('KZT', '₸')}.`
       );
@@ -230,6 +368,10 @@ const PaymentsPage = () => {
       setIsSubmitting(false);
     }
   };
+
+  const destinationBankMeta =
+    method === 'own' ? getBankMeta(destinationAccount?.bank) : getBankMeta(KZ_BANKS.find((bank) => bank.id === recipientBankId)?.name);
+  const sourceBankMeta = getBankMeta(sourceAccount?.bank);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
@@ -268,7 +410,6 @@ const PaymentsPage = () => {
                 </span>
                 <div>
                   <p className="text-sm font-medium text-slate-100">Между своими счетами</p>
-                  <p className="text-xs text-slate-400">Мгновенно и без комиссии</p>
                 </div>
               </button>
 
@@ -282,7 +423,6 @@ const PaymentsPage = () => {
                 </span>
                 <div>
                   <p className="text-sm font-medium text-slate-100">По номеру телефона</p>
-                  <p className="text-xs text-slate-400">Фиксированная комиссия 500 ₸</p>
                 </div>
               </button>
 
@@ -296,7 +436,6 @@ const PaymentsPage = () => {
                 </span>
                 <div>
                   <p className="text-sm font-medium text-slate-100">По номеру карты</p>
-                  <p className="text-xs text-slate-400">Комиссия 0.95%</p>
                 </div>
               </button>
 
@@ -310,7 +449,6 @@ const PaymentsPage = () => {
                 </span>
                 <div>
                   <p className="text-sm font-semibold text-emerald-200">FinHub QR</p>
-                  <p className="text-xs text-emerald-100/80">Сканировать QR для оплаты</p>
                 </div>
               </button>
             </motion.section>
@@ -337,49 +475,62 @@ const PaymentsPage = () => {
               </button>
 
               <div className="space-y-2">
-                <label className="text-xs font-medium text-slate-300">Счет списания</label>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {bankOptions.map((bank) => (
-                    <button
-                      key={bank.id}
-                      type="button"
-                      onClick={() => setFromBank(bank.id)}
-                      className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
-                        fromBank === bank.id
-                          ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                          : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                      }`}
-                    >
-                      <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.tone}`}>
-                        {bank.logo}
-                      </span>
-                      <span>{bank.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {method === 'own' && (
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-300">Счет зачисления</label>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {bankOptions.map((bank) => (
+                <label className="text-xs font-medium text-slate-300">Откуда</label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {accounts.map((account) => {
+                    const bankMeta = getBankMeta(account.bank);
+                    return (
                       <button
-                        key={bank.id}
+                        key={account.id}
                         type="button"
-                        onClick={() => setToBank(bank.id)}
-                        className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
-                          toBank === bank.id
+                        onClick={() => setFromAccountId(account.id)}
+                        className={`flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
+                          fromAccountId === account.id
                             ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
                             : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
                         }`}
                       >
-                        <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.tone}`}>
-                          {bank.logo}
+                        <span className="inline-flex items-center gap-2">
+                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
+                            {bankMeta.logo}
+                          </span>
+                          <span>{account.bank}</span>
                         </span>
-                        <span>{bank.name}</span>
+                        <span>{formatCurrency(account.balance).replace('KZT', '₸')}</span>
                       </button>
-                    ))}
+                    );
+                  })}
+                </div>
+                {accountsLoading && <p className="text-xs text-slate-500">Загрузка счетов...</p>}
+              </div>
+
+              {method === 'own' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-slate-300">Куда</label>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {accounts.map((account) => {
+                      const bankMeta = getBankMeta(account.bank);
+                      return (
+                        <button
+                          key={account.id}
+                          type="button"
+                          onClick={() => setToAccountId(account.id)}
+                          className={`flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
+                            toAccountId === account.id
+                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                          }`}
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
+                              {bankMeta.logo}
+                            </span>
+                            <span>{account.bank}</span>
+                          </span>
+                          <span>{formatCurrency(account.balance).replace('KZT', '₸')}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -402,21 +553,21 @@ const PaymentsPage = () => {
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-slate-300">Банк получателя</label>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {bankOptions.map((bank) => (
+                      {KZ_BANKS.map((bank) => (
                         <button
                           key={bank.id}
                           type="button"
-                          onClick={() => setTargetBank(bank.id)}
+                          onClick={() => setRecipientBankId(bank.id)}
                           className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
-                            targetBank === bank.id
+                            recipientBankId === bank.id
                               ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
                               : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
                           }`}
                         >
-                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.tone}`}>
+                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.badgeTone}`}>
                             {bank.logo}
                           </span>
-                          <span>{bank.name}</span>
+                          <span>{bank.shortName}</span>
                         </button>
                       ))}
                     </div>
@@ -425,18 +576,43 @@ const PaymentsPage = () => {
               )}
 
               {method === 'card' && (
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-300" htmlFor="cardNumber">Номер карты</label>
-                  <input
-                    id="cardNumber"
-                    type="text"
-                    inputMode="numeric"
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(formatCardValue(e.target.value))}
-                    placeholder="0000 0000 0000 0000"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
-                  />
-                </div>
+                <>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-slate-300" htmlFor="cardNumber">Номер карты</label>
+                    <input
+                      id="cardNumber"
+                      type="text"
+                      inputMode="numeric"
+                      value={cardNumber}
+                      onChange={(e) => setCardNumber(formatCardValue(e.target.value))}
+                      placeholder="0000 0000 0000 0000"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-slate-300">Банк получателя</label>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {KZ_BANKS.map((bank) => (
+                        <button
+                          key={bank.id}
+                          type="button"
+                          onClick={() => setRecipientBankId(bank.id)}
+                          className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
+                            recipientBankId === bank.id
+                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                          }`}
+                        >
+                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.badgeTone}`}>
+                            {bank.logo}
+                          </span>
+                          <span>{bank.shortName}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
 
               <div className="space-y-2">
@@ -451,13 +627,27 @@ const PaymentsPage = () => {
                   placeholder="5000"
                   className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                 />
-                <p className="text-xs text-slate-400">
-                  Комиссия:{' '}
-                  <span className="font-medium text-slate-200">
-                    {formatCurrency(commission).replace('KZT', '₸')}
-                  </span>
-                </p>
+                <p className="text-xs text-slate-400">{commissionText}</p>
                 <p className="text-xs text-slate-500">К списанию: {formatCurrency(totalDebit).replace('KZT', '₸')}</p>
+              </div>
+
+              <div className="rounded-xl border border-slate-700/70 bg-slate-900/60 p-3 text-xs text-slate-300">
+                <p className="mb-2 font-medium text-slate-100">Подтверждение перевода</p>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-2">
+                    <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${sourceBankMeta.badgeTone}`}>
+                      {sourceBankMeta.logo}
+                    </span>
+                    <span>{sourceAccount?.bank ?? '—'}</span>
+                  </span>
+                  <span>→</span>
+                  <span className="inline-flex items-center gap-2">
+                    <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${destinationBankMeta.badgeTone}`}>
+                      {destinationBankMeta.logo}
+                    </span>
+                    <span>{method === 'own' ? destinationAccount?.bank ?? '—' : destinationBankMeta.shortName}</span>
+                  </span>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -472,15 +662,23 @@ const PaymentsPage = () => {
                 />
               </div>
 
+              {insufficientFunds && <p className="text-xs text-rose-300">Недостаточно средств</p>}
               {error && <p className="text-xs text-red-400">{error}</p>}
 
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={
+                  isSubmitting ||
+                  accountsLoading ||
+                  accounts.length === 0 ||
+                  !sourceAccount ||
+                  (method === 'own' && !destinationAccount) ||
+                  insufficientFunds
+                }
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 hover:shadow-emerald-400/50 disabled:cursor-not-allowed disabled:bg-emerald-700/50"
               >
                 <SendHorizontal size={16} />
-                {isSubmitting ? 'Отправка...' : 'Подтвердить перевод'}
+                {isSubmitting ? 'Отправка...' : 'Перевести'}
               </button>
             </motion.form>
           )}

@@ -12,6 +12,8 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { fetchDashboardData, type DashboardData } from '../lib/financeApi';
+import { getSupabaseClient } from '../lib/supabaseClient';
+import { getBankMeta, KZ_BANKS } from '../lib/banks';
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('ru-KZ', {
@@ -30,6 +32,9 @@ const DashboardPage = () => {
 
   const [smartPocket, setSmartPocket] = useState(250000);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [isAddBankModalOpen, setIsAddBankModalOpen] = useState(false);
+  const [isCreatingBank, setIsCreatingBank] = useState(false);
+  const [selectedNewBank, setSelectedNewBank] = useState(KZ_BANKS[0].name);
   const [fromBank, setFromBank] = useState<'Kaspi' | 'Freedom' | 'Halyk' | 'Unified' | 'External'>(
     'Kaspi'
   );
@@ -38,6 +43,7 @@ const DashboardPage = () => {
   );
 
   const totalBalance = dashboardData?.totalBalance ?? 0;
+  const connectedAccounts = dashboardData?.accounts ?? [];
   const availableBalance = useMemo(
     () => Math.max(totalBalance - smartPocket, 0),
     [totalBalance, smartPocket]
@@ -89,6 +95,63 @@ const DashboardPage = () => {
       window.removeEventListener('finhub:accounts-updated', handleAccountsUpdated);
     };
   }, []);
+
+  const handleCreateBankAccount = async () => {
+    setError(null);
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setError('Supabase не настроен. Проверьте переменные окружения.');
+      return;
+    }
+
+    setIsCreatingBank(true);
+    try {
+      const {
+        data: { user: authUser },
+        error: userError
+      } = await supabase.auth.getUser();
+
+      if (userError || !authUser) {
+        throw userError ?? new Error('Пользователь не найден.');
+      }
+
+      const { data: existingAccount, error: existingError } = await supabase
+        .from('accounts')
+        .select('id')
+        .eq('user_id', authUser.id)
+        .eq('bank', selectedNewBank)
+        .maybeSingle();
+
+      if (existingError) {
+        throw existingError;
+      }
+
+      if (existingAccount) {
+        setError(`Счет ${selectedNewBank} уже подключен.`);
+        setIsAddBankModalOpen(false);
+        return;
+      }
+
+      const { error: insertError } = await supabase.from('accounts').insert({
+        user_id: authUser.id,
+        bank: selectedNewBank,
+        balance: 0
+      });
+
+      if (insertError) {
+        throw insertError;
+      }
+
+      window.dispatchEvent(new Event('finhub:accounts-updated'));
+      setIsAddBankModalOpen(false);
+    } catch (createError) {
+      // eslint-disable-next-line no-console
+      console.error(createError);
+      setError('Не удалось открыть новый счет. Попробуйте еще раз.');
+    } finally {
+      setIsCreatingBank(false);
+    }
+  };
 
   return (
     <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-4 px-4 py-6 sm:gap-6 sm:px-6 lg:px-8">
@@ -194,7 +257,7 @@ const DashboardPage = () => {
                   после изоляции Smart Pocket
                 </p>
                 <p className="text-xs text-slate-400 sm:text-sm">
-                  Аггрегировано из Kaspi, Freedom, Halyk
+                  Синхронизация всех подключенных банков Казахстана
                 </p>
               </div>
 
@@ -217,81 +280,58 @@ const DashboardPage = () => {
           </div>
 
           {/* Bank Cards */}
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {/* Kaspi */}
-            <article className="glass-soft relative overflow-hidden p-4">
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-yellow-500/20 via-amber-400/10 to-transparent" />
-              <div className="relative flex flex-col gap-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
-                    Kaspi Gold
-                  </span>
-                  <span className="pill border-amber-300/40 bg-amber-400/10 text-[10px] text-amber-100">
-                    Синхронизировано
-                  </span>
-                </div>
-                <div>
-                  <p className="text-[11px] text-amber-100/80">Доступно</p>
-                  <p className="mt-1 text-xl font-semibold text-amber-50">
-                    {formatCurrency(dashboardData?.kaspiBalance ?? 0).replace('KZT', '₸')}
-                  </p>
-                </div>
-                <div className="mt-2 flex justify-between text-[10px] text-amber-100/80">
-                  <span>Kaspi Red •••• 9214</span>
-                  <span>Кэшбэк 5%</span>
-                </div>
-              </div>
-            </article>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Счета</p>
+              <button
+                type="button"
+                onClick={() => setIsAddBankModalOpen(true)}
+                className="rounded-xl border border-emerald-400/50 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+              >
+                + Открыть новый счет
+              </button>
+            </div>
 
-            {/* Freedom */}
-            <article className="glass-soft relative overflow-hidden p-4">
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-emerald-400/25 via-emerald-500/10 to-transparent" />
-              <div className="relative flex flex-col gap-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">
-                    Freedom
-                  </span>
-                  <span className="pill border-emerald-300/50 bg-emerald-400/10 text-[10px] text-emerald-100">
-                    Синхронизировано
-                  </span>
-                </div>
-                <div>
-                  <p className="text-[11px] text-emerald-100/80">Доступно</p>
-                  <p className="mt-1 text-xl font-semibold text-emerald-50">
-                    {formatCurrency(dashboardData?.freedomBalance ?? 0).replace('KZT', '₸')}
-                  </p>
-                </div>
-                <div className="mt-2 flex justify-between text-[10px] text-emerald-100/80">
-                  <span>Freedom Card •••• 4412</span>
-                  <span>Инвесткопилка активна</span>
-                </div>
-              </div>
-            </article>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {connectedAccounts.map((account) => {
+                const bankMeta = getBankMeta(account.bank);
 
-            {/* Halyk */}
-            <article className="glass-soft relative overflow-hidden p-4">
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-yellow-300/25 via-lime-300/10 to-transparent" />
-              <div className="relative flex flex-col gap-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-yellow-100">
-                    Halyk
-                  </span>
-                  <span className="pill border-yellow-200/60 bg-yellow-300/10 text-[10px] text-yellow-50">
-                    Синхронизировано
-                  </span>
+                return (
+                  <article key={account.id} className="glass-soft relative overflow-hidden p-4">
+                    <div
+                      className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${bankMeta.cardGradient}`}
+                    />
+                    <div className="relative flex flex-col gap-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-100">
+                          {account.bank}
+                        </span>
+                        <span className="pill border-slate-500/40 bg-slate-900/40 text-[10px] text-slate-100">
+                          Подключено
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-slate-200/80">Доступно</p>
+                        <p className="mt-1 text-xl font-semibold text-slate-50">
+                          {formatCurrency(account.balance).replace('KZT', '₸')}
+                        </p>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-[10px] text-slate-200/80">
+                        <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold ${bankMeta.badgeTone}`}>
+                          {bankMeta.logo}
+                        </span>
+                        <span>{bankMeta.shortName}</span>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+              {connectedAccounts.length === 0 && !loading && (
+                <div className="glass-soft rounded-2xl border border-slate-700/70 p-4 text-xs text-slate-300">
+                  Пока нет подключенных счетов. Нажмите «Открыть новый счет», чтобы добавить банк.
                 </div>
-                <div>
-                  <p className="text-[11px] text-yellow-50/80">Доступно</p>
-                  <p className="mt-1 text-xl font-semibold text-yellow-50">
-                    {formatCurrency(dashboardData?.halykBalance ?? 0).replace('KZT', '₸')}
-                  </p>
-                </div>
-                <div className="mt-2 flex justify-between text-[10px] text-yellow-50/80">
-                  <span>Halyk Bank •••• 7773</span>
-                  <span>Зарплатный проект</span>
-                </div>
-              </div>
-            </article>
+              )}
+            </div>
           </div>
 
           {/* Smart Pocket */}
@@ -484,6 +524,74 @@ const DashboardPage = () => {
 
       {/* Merge funds modal */}
       <AnimatePresence>
+        {isAddBankModalOpen && (
+          <motion.div
+            className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/60 backdrop-blur-md"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="glass-panel relative w-full max-w-md px-5 py-5 sm:px-6 sm:py-6"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{ type: 'spring', stiffness: 260, damping: 24 }}
+            >
+              <button
+                type="button"
+                className="absolute right-3 top-3 rounded-full bg-slate-900/60 p-1 text-slate-400 hover:text-slate-100"
+                onClick={() => setIsAddBankModalOpen(false)}
+              >
+                <span className="sr-only">Закрыть</span>
+                ×
+              </button>
+              <div className="mb-4 space-y-1 pr-6">
+                <p className="text-xs uppercase tracking-[0.22em] text-slate-400">Новый счет</p>
+                <p className="text-sm font-medium text-slate-100">Выберите банк для подключения</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {KZ_BANKS.map((bank) => (
+                  <button
+                    key={bank.id}
+                    type="button"
+                    onClick={() => setSelectedNewBank(bank.name)}
+                    className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
+                      selectedNewBank === bank.name
+                        ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                        : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                    }`}
+                  >
+                    <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.badgeTone}`}>
+                      {bank.logo}
+                    </span>
+                    <span>{bank.shortName}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3 pt-2">
+                <button
+                  type="button"
+                  className="text-xs text-slate-400 hover:text-slate-200"
+                  onClick={() => setIsAddBankModalOpen(false)}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCreateBankAccount}
+                  disabled={isCreatingBank}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-700/50"
+                >
+                  {isCreatingBank ? 'Открытие...' : 'Открыть счет'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
         {isMergeModalOpen && (
           <motion.div
             className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/60 backdrop-blur-md"

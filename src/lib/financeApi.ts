@@ -12,7 +12,6 @@ export type DashboardData = {
   freedomBalance: number;
   halykBalance: number;
   analytics: DailyAnalyticsPoint[];
-  transactions: DashboardTransaction[];
 };
 
 export type DashboardTransaction = {
@@ -40,8 +39,7 @@ const buildFallbackData = (): DashboardData => ({
     { name: 'Пт', income: 200000, expense: 190000 },
     { name: 'Сб', income: 120000, expense: 135000 },
     { name: 'Вс', income: 110000, expense: 90000 }
-  ],
-  transactions: []
+  ]
 });
 
 export const fetchDashboardData = async (): Promise<DashboardData> => {
@@ -86,20 +84,18 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
 
   const totalBalance = kaspiBalance + freedomBalance + halykBalance;
 
-  // 2. Транзакции за последний месяц для списка и недельной аналитики
+  // 2. Транзакции за последнюю неделю для аналитики
   const now = new Date();
   const weekAgo = new Date(now);
   weekAgo.setDate(now.getDate() - 6);
-  const monthAgo = new Date(now);
-  monthAgo.setDate(now.getDate() - 30);
 
   const { data: transactions, error: txError } = await supabase
     .from('transactions')
-    .select('id, amount, type, occurred_at, description, counterparty, bank')
+    .select('amount, type, occurred_at')
     .eq('user_id', user.id)
-    .gte('occurred_at', monthAgo.toISOString())
+    .gte('occurred_at', weekAgo.toISOString())
     .order('occurred_at', { ascending: false })
-    .limit(60);
+    .limit(200);
 
   if (txError) {
     throw txError;
@@ -133,7 +129,44 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     .concat(['Вс'])
     .map((label) => analyticsMap[label]);
 
-  const normalizedTransactions: DashboardTransaction[] = (transactions ?? []).map((tx) => {
+  return {
+    totalBalance,
+    kaspiBalance,
+    freedomBalance,
+    halykBalance,
+    analytics
+  };
+};
+
+export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]> => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return [];
+
+  const {
+    data: { user },
+    error: userError
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    throw userError ?? new Error('Пользователь не найден.');
+  }
+
+  const monthAgo = new Date();
+  monthAgo.setDate(monthAgo.getDate() - 30);
+
+  const { data: transactions, error: txError } = await supabase
+    .from('transactions')
+    .select('id, amount, type, occurred_at, description, counterparty, bank')
+    .eq('user_id', user.id)
+    .gte('occurred_at', monthAgo.toISOString())
+    .order('occurred_at', { ascending: false })
+    .limit(120);
+
+  if (txError) {
+    throw txError;
+  }
+
+  return (transactions ?? []).map((tx) => {
     const rawType = String(tx.type ?? 'other').toLowerCase();
     const normalizedType: DashboardTransaction['type'] =
       rawType === 'income' || rawType === 'expense' || rawType === 'transfer'
@@ -150,13 +183,4 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
       bank: tx.bank ? String(tx.bank) : null
     };
   });
-
-  return {
-    totalBalance,
-    kaspiBalance,
-    freedomBalance,
-    halykBalance,
-    analytics,
-    transactions: normalizedTransactions
-  };
 };

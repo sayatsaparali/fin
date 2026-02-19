@@ -1,5 +1,12 @@
 export const extractKzPhoneDigits = (input: string | null | undefined): string => {
-  let digits = String(input ?? '').replace(/\D/g, '');
+  const raw = String(input ?? '').trim();
+  const hasPlusSevenPrefix = raw.startsWith('+7');
+  let digits = raw.replace(/\D/g, '');
+
+  // When input already contains "+7" prefix, remove it from local digits immediately.
+  if (hasPlusSevenPrefix && digits.startsWith('7')) {
+    digits = digits.slice(1);
+  }
 
   if (digits.startsWith('8') && digits.length >= 11) {
     digits = `7${digits.slice(1)}`;

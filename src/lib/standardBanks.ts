@@ -1,11 +1,11 @@
-export const STANDARD_BANK_NAMES = ['Kaspi', 'Halyk Bank', 'BCC'] as const;
+export const STANDARD_BANK_NAMES = ['Kaspi Bank', 'Halyk Bank', 'BCC Bank'] as const;
 
 export type StandardBankName = (typeof STANDARD_BANK_NAMES)[number];
 
 export const STANDARD_BANK_BALANCES: Record<StandardBankName, number> = {
-  Kaspi: 50000,
+  'Kaspi Bank': 50000,
   'Halyk Bank': 75000,
-  BCC: 0
+  'BCC Bank': 0
 };
 
 export const normalizeToStandardBankName = (
@@ -14,14 +14,15 @@ export const normalizeToStandardBankName = (
   const normalized = String(value ?? '').trim().toLowerCase();
   if (!normalized) return null;
 
-  if (normalized.includes('kaspi')) return 'Kaspi';
+  if (normalized.includes('kaspi')) return 'Kaspi Bank';
   if (normalized.includes('halyk')) return 'Halyk Bank';
   if (
     normalized === 'bcc' ||
+    normalized.includes('bcc bank') ||
     normalized.includes('центркредит') ||
     normalized.includes('centercredit')
   ) {
-    return 'BCC';
+    return 'BCC Bank';
   }
 
   return null;

@@ -64,7 +64,7 @@ const DashboardPage = () => {
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isAddBankModalOpen, setIsAddBankModalOpen] = useState(false);
   const [isCreatingBank, setIsCreatingBank] = useState(false);
-  const [selectedNewBank, setSelectedNewBank] = useState<StandardBankName>('Kaspi');
+  const [selectedNewBank, setSelectedNewBank] = useState<StandardBankName>('Kaspi Bank');
   const [fromBank, setFromBank] = useState<'Kaspi' | 'Freedom' | 'Halyk' | 'Unified' | 'External'>(
     'Kaspi'
   );
@@ -869,7 +869,7 @@ const DashboardPage = () => {
                         | 'External')
                     }
                   >
-                    <option value="Kaspi">Kaspi</option>
+                    <option value="Kaspi">Kaspi Bank</option>
                     <option value="Freedom">Freedom</option>
                     <option value="Halyk">Halyk Bank</option>
                     <option value="Unified">Единый счёт FinHub</option>
@@ -892,7 +892,7 @@ const DashboardPage = () => {
                     }
                   >
                     <option value="Unified">Единый счёт FinHub (0%)</option>
-                    <option value="Kaspi">Kaspi</option>
+                    <option value="Kaspi">Kaspi Bank</option>
                     <option value="Freedom">Freedom</option>
                     <option value="Halyk">Halyk Bank</option>
                     <option value="External">Сторонние реквизиты</option>

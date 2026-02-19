@@ -74,16 +74,16 @@ type RecipientAccount = {
 };
 
 const mapRecipientBankToDbName = (bankId: BankId): StandardBankName => {
-  if (bankId === 'kaspi') return 'Kaspi';
+  if (bankId === 'kaspi') return 'Kaspi Bank';
   if (bankId === 'halyk') return 'Halyk Bank';
-  if (bankId === 'bcc') return 'BCC';
+  if (bankId === 'bcc') return 'BCC Bank';
   return 'Halyk Bank';
 };
 
 const STANDARD_TRANSFER_BANK_OPTIONS: Array<{ id: BankId; name: StandardBankName }> = [
-  { id: 'kaspi', name: 'Kaspi' },
+  { id: 'kaspi', name: 'Kaspi Bank' },
   { id: 'halyk', name: 'Halyk Bank' },
-  { id: 'bcc', name: 'BCC' }
+  { id: 'bcc', name: 'BCC Bank' }
 ];
 
 const fetchUserAccounts = async (
@@ -225,7 +225,7 @@ const PaymentsPage = () => {
 
   const [newFavoriteName, setNewFavoriteName] = useState('');
   const [newFavoriteCategory, setNewFavoriteCategory] = useState<FavoriteCategory>('phone');
-  const [newFavoriteBankName, setNewFavoriteBankName] = useState<StandardBankName>('Kaspi');
+  const [newFavoriteBankName, setNewFavoriteBankName] = useState<StandardBankName>('Kaspi Bank');
   const [newFavoriteValue, setNewFavoriteValue] = useState('');
   const [newFavoriteAvatar, setNewFavoriteAvatar] = useState('');
   const phoneInputRef = useRef<HTMLInputElement | null>(null);
@@ -312,7 +312,7 @@ const PaymentsPage = () => {
     const lookupRecipientByPhone = async () => {
       if (method !== 'phone') return;
       const selectedBank =
-        normalizeToStandardBankName(mapRecipientBankToDbName(recipientBankId)) ?? 'Kaspi';
+        normalizeToStandardBankName(mapRecipientBankToDbName(recipientBankId)) ?? 'Kaspi Bank';
 
       const digits = phoneDigits;
       if (digits.length !== 10) {

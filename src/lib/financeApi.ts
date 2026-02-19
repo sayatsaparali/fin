@@ -21,8 +21,10 @@ export type DashboardAccount = {
 export type DashboardTransaction = {
   id: string;
   amount: number;
+  description: string | null;
   category: string | null;
   counterparty: string | null;
+  commission: number;
   date: string;
   kind: 'income' | 'expense' | 'other';
 };
@@ -87,16 +89,40 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   const weekAgo = new Date(now);
   weekAgo.setDate(now.getDate() - 6);
 
-  const { data: transactions, error: txError } = await supabase
+  const { data: transactionsByNewSchema, error: txNewSchemaError } = await supabase
     .from('transactions')
-    .select('amount, type, occurred_at')
+    .select('amount, type, date')
     .eq('user_id', user.id)
-    .gte('occurred_at', weekAgo.toISOString())
-    .order('occurred_at', { ascending: false })
+    .gte('date', weekAgo.toISOString())
+    .order('date', { ascending: false })
     .limit(200);
 
-  if (txError) {
-    throw txError;
+  let normalizedTransactions: Array<{ amount: number; type: string; occurredAt: string }> = [];
+
+  if (!txNewSchemaError) {
+    normalizedTransactions = (transactionsByNewSchema ?? []).map((tx) => ({
+      amount: Number(tx.amount ?? 0),
+      type: String(tx.type ?? ''),
+      occurredAt: String(tx.date ?? '')
+    }));
+  } else {
+    const { data: transactionsLegacy, error: txLegacyError } = await supabase
+      .from('transactions')
+      .select('amount, type, occurred_at')
+      .eq('user_id', user.id)
+      .gte('occurred_at', weekAgo.toISOString())
+      .order('occurred_at', { ascending: false })
+      .limit(200);
+
+    if (txLegacyError) {
+      throw txLegacyError;
+    }
+
+    normalizedTransactions = (transactionsLegacy ?? []).map((tx) => ({
+      amount: Number(tx.amount ?? 0),
+      type: String(tx.type ?? ''),
+      occurredAt: String(tx.occurred_at ?? '')
+    }));
   }
 
   const analyticsMap: Record<string, DailyAnalyticsPoint> = {};
@@ -105,15 +131,15 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     analyticsMap[label] = { name: label, income: 0, expense: 0 };
   });
 
-  (transactions ?? []).forEach((tx) => {
-    const date = new Date(tx.occurred_at as string);
+  normalizedTransactions.forEach((tx) => {
+    const date = new Date(tx.occurredAt);
     if (Number.isNaN(date.getTime()) || date < weekAgo) return;
 
     const dayIndex = date.getDay(); // 0 (Вс) - 6 (Сб)
     const label = weekdayLabels[dayIndex];
 
-    const amount = Number(tx.amount ?? 0);
-    const type = String(tx.type);
+    const amount = tx.amount;
+    const type = tx.type;
 
     if (type === 'income') {
       analyticsMap[label].income += amount;
@@ -150,7 +176,48 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const monthAgo = new Date();
   monthAgo.setDate(monthAgo.getDate() - 30);
 
-  // Primary schema used by Transactions page: amount, category, counterparty, date
+  const normalizeKind = (
+    rawType: string | null | undefined,
+    amount: number
+  ): DashboardTransaction['kind'] => {
+    const type = String(rawType ?? '').toLowerCase();
+    if (type === 'income') return 'income';
+    if (type === 'expense') return 'expense';
+    if (amount < 0) return 'expense';
+    if (amount > 0) return 'income';
+    return 'other';
+  };
+
+  const { data: transactionsRichSchema, error: txRichSchemaError } = await supabase
+    .from('transactions')
+    .select('id, amount, description, category, counterparty, commission, type, date')
+    .eq('user_id', user.id)
+    .gte('date', monthAgo.toISOString())
+    .order('date', { ascending: false })
+    .limit(120);
+
+  if (!txRichSchemaError) {
+    return (transactionsRichSchema ?? []).map((tx) => {
+      const amount = Number(tx.amount ?? 0);
+      const description = tx.description ? String(tx.description) : null;
+      const category = tx.category ? String(tx.category) : null;
+      const counterparty = tx.counterparty ? String(tx.counterparty) : null;
+      const commission = Number(tx.commission ?? 0);
+      const kind = normalizeKind(String(tx.type ?? ''), amount);
+
+      return {
+        id: String(tx.id ?? crypto.randomUUID()),
+        amount,
+        description,
+        category,
+        counterparty,
+        commission,
+        date: String(tx.date ?? ''),
+        kind
+      };
+    });
+  }
+
   const { data: transactionsByNewSchema, error: txNewSchemaError } = await supabase
     .from('transactions')
     .select('id, amount, category, counterparty, date')
@@ -164,23 +231,51 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
       const amount = Number(tx.amount ?? 0);
       const category = tx.category ? String(tx.category) : null;
       const counterparty = tx.counterparty ? String(tx.counterparty) : null;
-      const kind: DashboardTransaction['kind'] = amount < 0 ? 'expense' : 'income';
+      const kind = normalizeKind(null, amount);
 
       return {
         id: String(tx.id ?? crypto.randomUUID()),
         amount,
+        description: category,
         category,
         counterparty,
+        commission: 0,
         date: String(tx.date ?? ''),
         kind
       };
     });
   }
 
-  // Fallback for previous schema (type/description/occurred_at/bank) to avoid runtime errors
   // eslint-disable-next-line no-console
-  console.log('Transactions new schema query failed, fallback applied:', txNewSchemaError.message);
+  console.log('Transactions new schema query failed, fallback applied:', txRichSchemaError?.message ?? txNewSchemaError.message);
   const { data: transactionsLegacy, error: txLegacyError } = await supabase
+    .from('transactions')
+    .select('id, amount, type, description, counterparty, commission, occurred_at, bank')
+    .eq('user_id', user.id)
+    .gte('occurred_at', monthAgo.toISOString())
+    .order('occurred_at', { ascending: false })
+    .limit(120);
+
+  if (!txLegacyError) {
+    return (transactionsLegacy ?? []).map((tx) => {
+      const amount = Number(tx.amount ?? 0);
+      const description = tx.description ? String(tx.description) : null;
+      const category = tx.description ? String(tx.description) : tx.bank ? String(tx.bank) : null;
+      const kind = normalizeKind(String(tx.type ?? ''), amount);
+      return {
+        id: String(tx.id ?? crypto.randomUUID()),
+        amount,
+        description,
+        category,
+        counterparty: tx.counterparty ? String(tx.counterparty) : null,
+        commission: Number(tx.commission ?? 0),
+        date: String(tx.occurred_at ?? ''),
+        kind
+      };
+    });
+  }
+
+  const { data: transactionsLegacyNoCommission, error: txLegacyNoCommissionError } = await supabase
     .from('transactions')
     .select('id, amount, type, description, counterparty, occurred_at, bank')
     .eq('user_id', user.id)
@@ -188,20 +283,22 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     .order('occurred_at', { ascending: false })
     .limit(120);
 
-  if (txLegacyError) {
-    throw txLegacyError;
+  if (txLegacyNoCommissionError) {
+    throw txLegacyNoCommissionError;
   }
 
-  return (transactionsLegacy ?? []).map((tx) => {
-    const rawType = String(tx.type ?? 'other').toLowerCase();
-    const kind: DashboardTransaction['kind'] =
-      rawType === 'income' ? 'income' : rawType === 'expense' ? 'expense' : 'other';
+  return (transactionsLegacyNoCommission ?? []).map((tx) => {
+    const amount = Number(tx.amount ?? 0);
+    const description = tx.description ? String(tx.description) : null;
     const category = tx.description ? String(tx.description) : tx.bank ? String(tx.bank) : null;
+    const kind = normalizeKind(String(tx.type ?? ''), amount);
     return {
       id: String(tx.id ?? crypto.randomUUID()),
-      amount: Number(tx.amount ?? 0),
+      amount,
+      description,
       category,
       counterparty: tx.counterparty ? String(tx.counterparty) : null,
+      commission: 0,
       date: String(tx.occurred_at ?? ''),
       kind
     };

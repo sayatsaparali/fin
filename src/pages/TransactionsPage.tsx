@@ -24,7 +24,7 @@ const formatDateTime = (value: string) => {
 };
 
 const getTransactionLabel = (tx: DashboardTransaction) =>
-  tx.counterparty ?? tx.category ?? 'Операция';
+  tx.description ?? tx.counterparty ?? tx.category ?? 'Операция';
 
 const getTransactionIcon = (tx: DashboardTransaction): { badge: string; tone: string } => {
   const label = (tx.category ?? tx.counterparty ?? '').toLowerCase();
@@ -54,9 +54,10 @@ const TransactionsPage = () => {
   useEffect(() => {
     let isMounted = true;
 
-    const load = async () => {
+    const load = async (withLoader = true) => {
       try {
-        setLoading(true);
+        if (withLoader) setLoading(true);
+        setError(null);
         const data = await fetchTransactionsHistory();
         if (!isMounted) return;
         setTransactions(data);
@@ -71,9 +72,15 @@ const TransactionsPage = () => {
     };
 
     load();
+    const handleTransactionsUpdated = () => {
+      load(false);
+    };
+
+    window.addEventListener('finhub:transactions-updated', handleTransactionsUpdated);
 
     return () => {
       isMounted = false;
+      window.removeEventListener('finhub:transactions-updated', handleTransactionsUpdated);
     };
   }, []);
 
@@ -122,6 +129,11 @@ const TransactionsPage = () => {
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-slate-400">
                       {formatDateTime(tx.date)} • {tx.category ?? 'Без категории'}
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                      {tx.commission > 0
+                        ? `Комиссия: ${formatCurrency(tx.commission).replace('KZT', '₸')}`
+                        : 'Без комиссии'}
                     </p>
                   </div>
 

@@ -100,6 +100,11 @@ type ProfileLookupRow = {
   phone_number: string | null;
 };
 
+type RecipientAccount = {
+  id: string;
+  bank: string;
+};
+
 const PaymentsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -116,6 +121,8 @@ const PaymentsPage = () => {
   const [ownPhoneDigits, setOwnPhoneDigits] = useState('');
   const [recipientName, setRecipientName] = useState<string | null>(null);
   const [recipientUserId, setRecipientUserId] = useState<string | null>(null);
+  const [recipientAccounts, setRecipientAccounts] = useState<RecipientAccount[]>([]);
+  const [recipientLookupError, setRecipientLookupError] = useState<string | null>(null);
   const [isRecipientLookupLoading, setIsRecipientLookupLoading] = useState(false);
 
   const [fromAccountId, setFromAccountId] = useState<string>('');
@@ -224,6 +231,8 @@ const PaymentsPage = () => {
         if (!isMounted) return;
         setRecipientName(null);
         setRecipientUserId(null);
+        setRecipientAccounts([]);
+        setRecipientLookupError(null);
         return;
       }
 
@@ -248,15 +257,35 @@ const PaymentsPage = () => {
         if (!matched) {
           setRecipientName(null);
           setRecipientUserId(null);
+          setRecipientAccounts([]);
+          setRecipientLookupError('Пользователь с таким номером не зарегистрирован в FinHub');
           return;
         }
 
         const fullName = `${matched.first_name ?? ''} ${matched.last_name ?? ''}`.trim();
         setRecipientName(fullName || 'Получатель FinHub');
         setRecipientUserId(matched.id);
+        setRecipientLookupError(null);
+
+        const { data: matchedAccounts, error: matchedAccountsError } = await supabase
+          .from('accounts')
+          .select('id, bank')
+          .eq('user_id', matched.id);
+
+        if (matchedAccountsError) throw matchedAccountsError;
+        if (!isMounted) return;
+
+        setRecipientAccounts(
+          (matchedAccounts ?? []).map((row) => ({
+            id: String((row as { id?: string }).id ?? ''),
+            bank: String((row as { bank?: string }).bank ?? '')
+          }))
+        );
       } catch (lookupError) {
         // eslint-disable-next-line no-console
         console.error('Recipient lookup failed:', lookupError);
+        if (!isMounted) return;
+        setRecipientLookupError('Ошибка поиска получателя. Попробуйте снова.');
       } finally {
         if (isMounted) setIsRecipientLookupLoading(false);
       }
@@ -273,6 +302,8 @@ const PaymentsPage = () => {
     if (method !== 'phone') {
       setRecipientName(null);
       setRecipientUserId(null);
+      setRecipientAccounts([]);
+      setRecipientLookupError(null);
       setIsRecipientLookupLoading(false);
     }
   }, [method]);
@@ -379,11 +410,16 @@ const PaymentsPage = () => {
   const destinationAccount = accounts.find((account) => account.id === toAccountId) ?? null;
 
   const sourceBankId = normalizeBankId(sourceAccount?.bank);
+  const recipientAccountForPhone =
+    recipientAccounts.find((account) => normalizeBankId(account.bank) === recipientBankId) ?? null;
+  const recipientPhoneBankId = normalizeBankId(recipientAccountForPhone?.bank);
 
   const applyFavoriteTransfer = (favorite: FavoriteContact) => {
     setError(null);
     setRecipientName(null);
     setRecipientUserId(null);
+    setRecipientAccounts([]);
+    setRecipientLookupError(null);
 
     const targetBankId = normalizeBankId(favorite.bank_name);
     setRecipientBankId(targetBankId === 'unknown' ? 'halyk' : targetBankId);
@@ -486,10 +522,10 @@ const PaymentsPage = () => {
     }
 
     if (method === 'phone') {
-      if (sourceBankId === recipientBankId) return 0;
+      if (sourceBankId === recipientPhoneBankId) return 0;
       const projectedMonthVolume = monthlySmpUsed + amountValue;
       if (projectedMonthVolume <= 500000) return 0;
-      return Math.max(Math.round(amountValue * 0.005), 250);
+      return Math.round(amountValue * 0.005);
     }
 
     if (sourceBankId === recipientBankId) {
@@ -509,7 +545,7 @@ const PaymentsPage = () => {
     }
 
     return Math.max(Math.round(amountValue * 0.007), 250);
-  }, [amountValue, method, sourceBankId, recipientBankId, monthlySmpUsed]);
+  }, [amountValue, method, sourceBankId, recipientBankId, recipientPhoneBankId, monthlySmpUsed]);
 
   const totalDebit = Math.max(0, amountValue + commission);
   const insufficientFunds = Boolean(sourceAccount && totalDebit > sourceAccount.balance);
@@ -525,8 +561,10 @@ const PaymentsPage = () => {
   const createTransactionRecord = async (params: {
     userId: string;
     amount: number;
-    category: string;
+    description: string;
     counterparty: string;
+    category: string;
+    commission: number;
     bankName: string;
     kind: 'income' | 'expense';
   }) => {
@@ -538,8 +576,11 @@ const PaymentsPage = () => {
     const { error: newSchemaError } = await supabase.from('transactions').insert({
       user_id: params.userId,
       amount: params.amount,
+      description: params.description,
       category: params.category,
       counterparty: params.counterparty,
+      commission: params.commission,
+      type: params.kind,
       date: nowIso
     });
 
@@ -551,8 +592,9 @@ const PaymentsPage = () => {
       user_id: params.userId,
       amount: params.amount,
       type: params.kind,
-      description: params.category,
+      description: params.description,
       counterparty: params.counterparty,
+      commission: params.commission,
       occurred_at: nowIso,
       bank: params.bankName
     });
@@ -610,6 +652,16 @@ const PaymentsPage = () => {
         setError('Нельзя перевести деньги самому себе по номеру телефона.');
         return;
       }
+
+      if (!recipientUserId || !recipientName) {
+        setError('Пользователь с таким номером не зарегистрирован в FinHub');
+        return;
+      }
+
+      if (!recipientAccountForPhone) {
+        setError('У получателя нет счета в выбранном банке.');
+        return;
+      }
     }
 
     if (method === 'card' && cardNumber.replace(/\s/g, '').length !== 16) {
@@ -632,14 +684,14 @@ const PaymentsPage = () => {
 
       const sourceNewBalance = sourceAccount.balance - totalDebit;
 
-      const { error: updateSourceError } = await supabase
-        .from('accounts')
-        .update({ balance: sourceNewBalance })
-        .eq('id', sourceAccount.id);
-
-      if (updateSourceError) throw updateSourceError;
-
       if (method === 'own' && destinationAccount) {
+        const { error: updateSourceError } = await supabase
+          .from('accounts')
+          .update({ balance: sourceNewBalance })
+          .eq('id', sourceAccount.id);
+
+        if (updateSourceError) throw updateSourceError;
+
         const destinationNewBalance = destinationAccount.balance + amountValue;
 
         const { error: updateDestinationError } = await supabase
@@ -660,47 +712,83 @@ const PaymentsPage = () => {
         await createTransactionRecord({
           userId: authUserId,
           amount: -totalDebit,
-          category: 'OWN_TRANSFER_OUT',
+          description: `Перевод на свой счет ${destinationAccount.bank}`,
           counterparty: destinationAccount.bank,
+          category: 'Переводы',
+          commission,
           bankName: sourceAccount.bank,
           kind: 'expense'
         });
         await createTransactionRecord({
           userId: authUserId,
           amount: amountValue,
-          category: 'OWN_TRANSFER_IN',
+          description: `Перевод со своего счета ${sourceAccount.bank}`,
           counterparty: sourceAccount.bank,
+          category: 'Переводы',
+          commission: 0,
           bankName: destinationAccount.bank,
           kind: 'income'
         });
+      } else if (method === 'phone') {
+        const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
+          p_sender_user_id: authUserId,
+          p_sender_account_id: sourceAccount.id,
+          p_recipient_user_id: recipientUserId,
+          p_recipient_account_id: recipientAccountForPhone?.id,
+          p_amount: amountValue,
+          p_commission: commission,
+          p_sender_counterparty: recipientName ?? 'Перевод по номеру телефона',
+          p_recipient_counterparty: sourceAccount.bank
+        });
+
+        if (transferRpcError) throw transferRpcError;
+
+        setAccounts((prev) =>
+          prev.map((account) =>
+            account.id === sourceAccount.id ? { ...account, balance: sourceNewBalance } : account
+          )
+        );
       } else {
+        const { error: updateSourceError } = await supabase
+          .from('accounts')
+          .update({ balance: sourceNewBalance })
+          .eq('id', sourceAccount.id);
+
+        if (updateSourceError) throw updateSourceError;
+
         setAccounts((prev) =>
           prev.map((account) =>
             account.id === sourceAccount.id ? { ...account, balance: sourceNewBalance } : account
           )
         );
 
-        const transferCategory = method === 'phone' ? 'SMP_PHONE_TRANSFER' : 'CARD_TRANSFER';
         const transferCounterparty =
           method === 'phone'
             ? recipientName ?? `Телефон ${phone.slice(-4)}`
             : `Карта ${cardNumber.replace(/\D/g, '').slice(-4)}`;
+        const transferDescription =
+          method === 'phone'
+            ? `Перевод ${recipientName ?? `на номер ${phone}`}`
+            : `Перевод на карту ${cardNumber.replace(/\D/g, '').slice(-4)}`;
 
         await createTransactionRecord({
           userId: authUserId,
           amount: -totalDebit,
-          category: transferCategory,
+          description: transferDescription,
           counterparty: transferCounterparty,
+          category: 'Переводы',
+          commission,
           bankName: sourceAccount.bank,
           kind: 'expense'
         });
       }
 
-      if (method === 'phone' && sourceBankId !== recipientBankId) {
+      if (method === 'phone' && sourceBankId !== recipientPhoneBankId) {
         setMonthlySmpUsed((prev) => prev + amountValue);
       }
 
       window.dispatchEvent(new Event('finhub:accounts-updated'));
+      window.dispatchEvent(new Event('finhub:transactions-updated'));
 
       setSuccessMessage(
         `Перевод успешно выполнен. Списано ${formatCurrency(totalDebit).replace('KZT', '₸')}.`
@@ -743,7 +831,11 @@ const PaymentsPage = () => {
   };
 
   const destinationBankMeta =
-    method === 'own' ? getBankMeta(destinationAccount?.bank) : getBankMeta(KZ_BANKS.find((bank) => bank.id === recipientBankId)?.name);
+    method === 'own'
+      ? getBankMeta(destinationAccount?.bank)
+      : method === 'phone'
+        ? getBankMeta(recipientAccountForPhone?.bank ?? KZ_BANKS.find((bank) => bank.id === recipientBankId)?.name)
+        : getBankMeta(KZ_BANKS.find((bank) => bank.id === recipientBankId)?.name);
   const sourceBankMeta = getBankMeta(sourceAccount?.bank);
 
   return (
@@ -939,8 +1031,13 @@ const PaymentsPage = () => {
                       <p className="text-xs text-emerald-300">Получатель: {recipientName}</p>
                     )}
                     {!isRecipientLookupLoading && getPhoneDigits(phone).length === 10 && !recipientName && (
-                      <p className="text-xs text-slate-500">
-                        Контакт не найден в FinHub. Перевод будет отправлен по реквизитам банка.
+                      <p className="text-xs text-rose-300">
+                        {recipientLookupError ?? 'Пользователь с таким номером не зарегистрирован в FinHub'}
+                      </p>
+                    )}
+                    {!isRecipientLookupLoading && recipientName && !recipientAccountForPhone && (
+                      <p className="text-xs text-rose-300">
+                        У получателя нет счета в выбранном банке.
                       </p>
                     )}
                   </div>
@@ -1070,6 +1167,8 @@ const PaymentsPage = () => {
                   accountsLoading ||
                   accounts.length === 0 ||
                   !sourceAccount ||
+                  (method === 'phone' && !recipientUserId) ||
+                  (method === 'phone' && !recipientAccountForPhone) ||
                   (method === 'own' && !destinationAccount) ||
                   insufficientFunds
                 }

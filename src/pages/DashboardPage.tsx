@@ -12,7 +12,12 @@ import {
 import { useNavigate } from 'react-router-dom';
 import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
 import { useUser } from '../context/UserContext';
-import { fetchDashboardData, type DashboardData } from '../lib/financeApi';
+import {
+  fetchDashboardData,
+  fetchTransactionsHistory,
+  type DashboardData,
+  type DashboardTransaction
+} from '../lib/financeApi';
 import {
   fetchFavoriteContacts,
   removeFavoriteContact,
@@ -28,6 +33,18 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 0
   }).format(value);
 
+const formatDateTime = (value: string) => {
+  if (!value) return 'Дата не указана';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Дата не указана';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+};
+
 const DashboardPage = () => {
   const { user } = useUser();
   const navigate = useNavigate();
@@ -37,6 +54,8 @@ const DashboardPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [profileFirstName, setProfileFirstName] = useState<string | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
+  const [recentTransactions, setRecentTransactions] = useState<DashboardTransaction[]>([]);
+  const [recentTransactionsLoading, setRecentTransactionsLoading] = useState(false);
 
   const [smartPocket, setSmartPocket] = useState(250000);
   const [favoriteContacts, setFavoriteContacts] = useState<FavoriteContact[]>([]);
@@ -109,6 +128,21 @@ const DashboardPage = () => {
       }
     };
 
+    const loadRecentTransactions = async () => {
+      try {
+        setRecentTransactionsLoading(true);
+        const transactions = await fetchTransactionsHistory();
+        if (!isMounted) return;
+        setRecentTransactions(transactions.slice(0, 5));
+      } catch (transactionsError) {
+        if (!isMounted) return;
+        // eslint-disable-next-line no-console
+        console.error('Failed to load recent transactions on dashboard:', transactionsError);
+      } finally {
+        if (isMounted) setRecentTransactionsLoading(false);
+      }
+    };
+
     const loadProfile = async () => {
       try {
         setIsProfileLoading(true);
@@ -150,19 +184,25 @@ const DashboardPage = () => {
     load();
     loadFavorites();
     loadProfile();
+    loadRecentTransactions();
     const handleAccountsUpdated = () => {
       load();
     };
     const handleFavoritesUpdated = () => {
       loadFavorites();
     };
+    const handleTransactionsUpdated = () => {
+      loadRecentTransactions();
+    };
     window.addEventListener('finhub:accounts-updated', handleAccountsUpdated);
     window.addEventListener('finhub:favorites-updated', handleFavoritesUpdated);
+    window.addEventListener('finhub:transactions-updated', handleTransactionsUpdated);
 
     return () => {
       isMounted = false;
       window.removeEventListener('finhub:accounts-updated', handleAccountsUpdated);
       window.removeEventListener('finhub:favorites-updated', handleFavoritesUpdated);
+      window.removeEventListener('finhub:transactions-updated', handleTransactionsUpdated);
     };
   }, [user?.email]);
 
@@ -615,6 +655,68 @@ const DashboardPage = () => {
               <div className="h-12 w-1 rounded-full bg-slate-800">
                 <div className="h-7 w-full rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600 shadow-[0_0_16px_rgba(34,197,94,0.7)]" />
               </div>
+            </div>
+          </section>
+
+          <section className="glass-panel px-4 py-4 sm:px-5 sm:py-5">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Последние транзакции</p>
+              <button
+                type="button"
+                onClick={() => navigate('/transactions')}
+                className="text-xs text-emerald-300 transition hover:text-emerald-200"
+              >
+                Все операции
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {recentTransactions.map((tx) => {
+                const label = tx.description ?? tx.counterparty ?? tx.category ?? 'Операция';
+                const isIncome = tx.kind === 'income';
+                const isExpense = tx.kind === 'expense';
+                const amountTone = isIncome
+                  ? 'text-emerald-300'
+                  : isExpense
+                    ? 'text-rose-300'
+                    : 'text-slate-200';
+                const amountPrefix = isIncome ? '+' : isExpense ? '-' : '';
+
+                return (
+                  <article
+                    key={tx.id}
+                    className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium text-slate-100">{label}</p>
+                        <p className="truncate text-[11px] text-slate-400">
+                          {formatDateTime(tx.date)}
+                          {tx.commission > 0
+                            ? ` • Комиссия ${formatCurrency(tx.commission).replace('KZT', '₸')}`
+                            : ''}
+                        </p>
+                      </div>
+                      <p className={`shrink-0 text-xs font-semibold ${amountTone}`}>
+                        {amountPrefix}
+                        {formatCurrency(Math.abs(tx.amount)).replace('KZT', '₸')}
+                      </p>
+                    </div>
+                  </article>
+                );
+              })}
+
+              {!recentTransactionsLoading && recentTransactions.length === 0 && (
+                <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
+                  Последние переводы появятся здесь после первой операции.
+                </p>
+              )}
+
+              {recentTransactionsLoading && (
+                <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
+                  Загрузка последних транзакций...
+                </p>
+              )}
             </div>
           </section>
 

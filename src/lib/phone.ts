@@ -31,8 +31,8 @@ export const formatKzPhoneFromDigits = (digitsInput: string | null | undefined):
   const p3 = digits.slice(6, 8);
   const p4 = digits.slice(8, 10);
 
-  let result = '+7';
-  if (p1) result += ` (${p1}`;
+  let result = '+7 ';
+  if (p1) result += `(${p1}`;
   if (p1.length === 3) result += ')';
   if (p2) result += ` ${p2}`;
   if (p3) result += `-${p3}`;

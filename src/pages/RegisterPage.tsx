@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
@@ -79,6 +79,7 @@ const RegisterPage = () => {
 
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const phoneInputRef = useRef<HTMLInputElement | null>(null);
 
   const birthDate = useMemo(
     () => normalizeBirthDate(birthDay, birthMonth, birthYear),
@@ -94,6 +95,17 @@ const RegisterPage = () => {
     password === confirmPassword &&
     agreedPersonalData &&
     agreedTerms;
+
+  const keepPhoneCaretAfterPrefix = () => {
+    requestAnimationFrame(() => {
+      const input = phoneInputRef.current;
+      if (!input) return;
+      const minPrefixCaret = 3; // "+7 "
+      if ((input.selectionStart ?? 0) < minPrefixCaret) {
+        input.setSelectionRange(minPrefixCaret, minPrefixCaret);
+      }
+    });
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -442,6 +454,7 @@ const RegisterPage = () => {
                   Номер телефона
                 </label>
                 <input
+                  ref={phoneInputRef}
                   id="phoneNumber"
                   type="tel"
                   inputMode="numeric"
@@ -449,6 +462,8 @@ const RegisterPage = () => {
                   className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                   value={formatKzPhoneFromDigits(phoneDigits)}
                   onChange={(e) => setPhoneDigits(extractKzPhoneDigits(e.target.value))}
+                  onFocus={keepPhoneCaretAfterPrefix}
+                  onClick={keepPhoneCaretAfterPrefix}
                   placeholder="+7 (7xx) xxx-xx-xx"
                 />
               </div>

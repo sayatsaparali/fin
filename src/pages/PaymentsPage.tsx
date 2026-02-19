@@ -119,10 +119,9 @@ const PaymentsPage = () => {
       const input = phoneInputRef.current;
       if (!input) return;
 
-      const minPrefixCaret = 2; // "+7"
+      const minPrefixCaret = 3; // "+7 "
       if ((input.selectionStart ?? 0) < minPrefixCaret) {
-        const pos = input.value.length;
-        input.setSelectionRange(pos, pos);
+        input.setSelectionRange(minPrefixCaret, minPrefixCaret);
       }
     });
   };

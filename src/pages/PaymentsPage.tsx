@@ -590,13 +590,25 @@ const PaymentsPage = () => {
       category: params.category,
       counterparty: params.counterparty,
       commission: params.commission,
+      bank: params.bankName,
       type: params.kind,
       date: nowIso
     });
 
-    if (!newSchemaError) {
-      return;
-    }
+    if (!newSchemaError) return;
+
+    const { error: newSchemaNoBankError } = await supabase.from('transactions').insert({
+      user_id: params.userId,
+      amount: params.amount,
+      description: params.description,
+      category: params.category,
+      counterparty: params.counterparty,
+      commission: params.commission,
+      type: params.kind,
+      date: nowIso
+    });
+
+    if (!newSchemaNoBankError) return;
 
     const { error: legacyError } = await supabase.from('transactions').insert({
       user_id: params.userId,
@@ -613,6 +625,7 @@ const PaymentsPage = () => {
       // eslint-disable-next-line no-console
       console.error('Failed to insert transaction record:', {
         newSchemaError,
+        newSchemaNoBankError,
         legacyError
       });
     }
@@ -1042,6 +1055,11 @@ const PaymentsPage = () => {
                     )}
                     {!isRecipientLookupLoading && recipientName && (
                       <p className="text-xs text-emerald-300">Получатель: {recipientName}</p>
+                    )}
+                    {!isRecipientLookupLoading && recipientName && recipientAccounts.length > 0 && (
+                      <p className="text-xs text-slate-400">
+                        Счета получателя: {recipientAccounts.map((acc) => acc.bank).join(', ')}
+                      </p>
                     )}
                     {!isRecipientLookupLoading && phoneDigits.length === 10 && !recipientName && (
                       <p className="text-xs text-rose-300">

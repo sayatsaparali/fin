@@ -131,6 +131,7 @@ const TransactionsPage = () => {
                       {formatDateTime(tx.date)} • {tx.category ?? 'Без категории'}
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                      {tx.bank ? `${tx.bank} • ` : ''}
                       {tx.commission > 0
                         ? `Комиссия: ${formatCurrency(tx.commission).replace('KZT', '₸')}`
                         : 'Без комиссии'}

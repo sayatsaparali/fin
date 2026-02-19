@@ -64,7 +64,7 @@ begin
     and user_id = p_recipient_user_id;
 
   begin
-    insert into transactions (user_id, amount, description, category, counterparty, commission, type, date)
+    insert into transactions (user_id, amount, description, category, counterparty, commission, bank, type, date)
     values
       (
         p_sender_user_id,
@@ -73,6 +73,7 @@ begin
         'Переводы',
         coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
         p_commission,
+        v_sender_bank,
         'expense',
         now()
       ),
@@ -83,12 +84,38 @@ begin
         'Переводы',
         coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
         0,
+        v_recipient_bank,
         'income',
         now()
       );
   exception
     when undefined_column then
       begin
+        insert into transactions (user_id, amount, description, category, counterparty, commission, type, date)
+        values
+          (
+            p_sender_user_id,
+            -(p_amount + p_commission),
+            coalesce('Перевод ' || nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
+            'Переводы',
+            coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
+            p_commission,
+            'expense',
+            now()
+          ),
+          (
+            p_recipient_user_id,
+            p_amount,
+            coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
+            'Переводы',
+            coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
+            0,
+            'income',
+            now()
+          );
+      exception
+        when undefined_column then
+          begin
         insert into transactions (user_id, amount, type, description, counterparty, commission, occurred_at, bank)
         values
           (
@@ -108,31 +135,32 @@ begin
             coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
             coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
             0,
-            now(),
-            v_recipient_bank
-          );
-      exception
-        when undefined_column then
-          insert into transactions (user_id, amount, type, description, counterparty, occurred_at, bank)
-          values
-            (
-              p_sender_user_id,
-              -(p_amount + p_commission),
-              'expense',
-              coalesce('Перевод ' || nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
-              coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
-              now(),
-              v_sender_bank
-            ),
-            (
-              p_recipient_user_id,
-              p_amount,
-              'income',
-              coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
-              coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
               now(),
               v_recipient_bank
             );
+          exception
+            when undefined_column then
+              insert into transactions (user_id, amount, type, description, counterparty, occurred_at, bank)
+              values
+                (
+                  p_sender_user_id,
+                  -(p_amount + p_commission),
+                  'expense',
+                  coalesce('Перевод ' || nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
+                  coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
+                  now(),
+                  v_sender_bank
+                ),
+                (
+                  p_recipient_user_id,
+                  p_amount,
+                  'income',
+                  coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
+                  coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
+                  now(),
+                  v_recipient_bank
+                );
+          end;
       end;
   end;
 end;

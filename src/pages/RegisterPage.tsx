@@ -59,6 +59,19 @@ const formatSupabaseError = (
     error.hint ? ` | hint: ${error.hint}` : ''
   }${error.code ? ` | code: ${error.code}` : ''}`;
 
+const generateRandomBalance = () => {
+  const min = 50000;
+  const max = 200000;
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+};
+
+const generateCardNumber = () => {
+  const prefixes = ['4400', '4578', '5169', '5278'];
+  const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+  const remaining = Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('');
+  return `${prefix}${remaining}`;
+};
+
 const RegisterPage = () => {
   const { login } = useUser();
   const navigate = useNavigate();
@@ -201,7 +214,7 @@ const RegisterPage = () => {
         return;
       }
 
-      const starterBanks = ['Kaspi Gold', 'Halyk Bank'] as const;
+      const starterBanks = ['Kaspi.kz', 'Halyk Bank', 'BCC (ЦентрКредит)'] as const;
       const { data: existingStarterAccounts, error: existingAccountsError } = await supabase
         .from('accounts')
         .select('bank')
@@ -230,23 +243,51 @@ const RegisterPage = () => {
         .map((bank) => ({
           user_id: userId,
           bank,
-          balance: 0
+          balance: generateRandomBalance(),
+          card_number: generateCardNumber()
         }));
 
       if (starterRows.length > 0) {
         const { error: starterAccountsError } = await supabase.from('accounts').insert(starterRows);
         if (starterAccountsError) {
-          // eslint-disable-next-line no-console
-          console.error('Supabase starter accounts insert error:', starterAccountsError);
-          setError(
-            formatSupabaseError('Ошибка создания стартовых счетов', {
-              message: starterAccountsError.message,
-              details: starterAccountsError.details ?? undefined,
-              hint: starterAccountsError.hint ?? undefined,
-              code: starterAccountsError.code ?? undefined
-            })
-          );
-          return;
+          const starterRowsAccountNumber = starterRows.map((row) => ({
+            user_id: row.user_id,
+            bank: row.bank,
+            balance: row.balance,
+            account_number: row.card_number
+          }));
+          const { error: starterAccountsAccountNumberError } = await supabase
+            .from('accounts')
+            .insert(starterRowsAccountNumber);
+
+          if (starterAccountsAccountNumberError) {
+            const starterRowsFallback = starterRows.map((row) => ({
+              user_id: row.user_id,
+              bank: row.bank,
+              balance: row.balance
+            }));
+            const { error: starterAccountsFallbackError } = await supabase
+              .from('accounts')
+              .insert(starterRowsFallback);
+
+            if (starterAccountsFallbackError) {
+              // eslint-disable-next-line no-console
+              console.error('Supabase starter accounts insert error:', {
+                starterAccountsError,
+                starterAccountsAccountNumberError,
+                starterAccountsFallbackError
+              });
+              setError(
+                formatSupabaseError('Ошибка создания стартовых счетов', {
+                  message: starterAccountsFallbackError.message,
+                  details: starterAccountsFallbackError.details ?? undefined,
+                  hint: starterAccountsFallbackError.hint ?? undefined,
+                  code: starterAccountsFallbackError.code ?? undefined
+                })
+              );
+              return;
+            }
+          }
         }
       }
 

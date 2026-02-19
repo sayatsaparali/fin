@@ -25,6 +25,7 @@ export type DashboardTransaction = {
   category: string | null;
   counterparty: string | null;
   commission: number;
+  bank: string | null;
   date: string;
   kind: 'income' | 'expense' | 'other';
 };
@@ -190,7 +191,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
   const { data: transactionsRichSchema, error: txRichSchemaError } = await supabase
     .from('transactions')
-    .select('id, amount, description, category, counterparty, commission, type, date')
+    .select('id, amount, description, category, counterparty, commission, bank, type, date')
     .eq('user_id', user.id)
     .gte('date', monthAgo.toISOString())
     .order('date', { ascending: false })
@@ -204,6 +205,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
       const counterparty = tx.counterparty ? String(tx.counterparty) : null;
       const commission = Number(tx.commission ?? 0);
       const kind = normalizeKind(String(tx.type ?? ''), amount);
+      const bank = tx.bank ? String(tx.bank) : null;
 
       return {
         id: String(tx.id ?? crypto.randomUUID()),
@@ -212,6 +214,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
         category,
         counterparty,
         commission,
+        bank,
         date: String(tx.date ?? ''),
         kind
       };
@@ -240,6 +243,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
         category,
         counterparty,
         commission: 0,
+        bank: null,
         date: String(tx.date ?? ''),
         kind
       };
@@ -269,6 +273,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
         category,
         counterparty: tx.counterparty ? String(tx.counterparty) : null,
         commission: Number(tx.commission ?? 0),
+        bank: tx.bank ? String(tx.bank) : null,
         date: String(tx.occurred_at ?? ''),
         kind
       };
@@ -299,6 +304,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
       category,
       counterparty: tx.counterparty ? String(tx.counterparty) : null,
       commission: 0,
+      bank: tx.bank ? String(tx.bank) : null,
       date: String(tx.occurred_at ?? ''),
       kind
     };

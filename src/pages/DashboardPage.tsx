@@ -692,6 +692,7 @@ const DashboardPage = () => {
                         <p className="truncate text-xs font-medium text-slate-100">{label}</p>
                         <p className="truncate text-[11px] text-slate-400">
                           {formatDateTime(tx.date)}
+                          {tx.bank ? ` • ${tx.bank}` : ''}
                           {tx.commission > 0
                             ? ` • Комиссия ${formatCurrency(tx.commission).replace('KZT', '₸')}`
                             : ''}

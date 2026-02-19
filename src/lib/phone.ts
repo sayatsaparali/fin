@@ -1,15 +1,20 @@
 export const extractKzPhoneDigits = (input: string | null | undefined): string => {
   let digits = String(input ?? '').replace(/\D/g, '');
 
-  if (digits.startsWith('8')) {
+  if (digits.startsWith('8') && digits.length >= 11) {
     digits = `7${digits.slice(1)}`;
   }
 
-  if (digits.startsWith('7')) {
+  // Remove country code only when it is truly present (11+ digits), not for local 10-digit numbers.
+  if (digits.startsWith('7') && digits.length === 11) {
     digits = digits.slice(1);
   }
 
-  return digits.slice(0, 10);
+  if (digits.length > 10) {
+    digits = digits.slice(-10);
+  }
+
+  return digits;
 };
 
 export const formatKzPhoneFromDigits = (digitsInput: string | null | undefined): string => {

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRightLeft,
@@ -110,8 +110,22 @@ const PaymentsPage = () => {
   const [newFavoriteBankName, setNewFavoriteBankName] = useState(KZ_BANKS[0].name);
   const [newFavoriteValue, setNewFavoriteValue] = useState('');
   const [newFavoriteAvatar, setNewFavoriteAvatar] = useState('');
+  const phoneInputRef = useRef<HTMLInputElement | null>(null);
 
   const amountValue = Number(amount || 0);
+
+  const keepPhoneCaretAfterPrefix = () => {
+    requestAnimationFrame(() => {
+      const input = phoneInputRef.current;
+      if (!input) return;
+
+      const minPrefixCaret = 2; // "+7"
+      if ((input.selectionStart ?? 0) < minPrefixCaret) {
+        const pos = input.value.length;
+        input.setSelectionRange(pos, pos);
+      }
+    });
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -204,6 +218,39 @@ const PaymentsPage = () => {
 
       try {
         setIsRecipientLookupLoading(true);
+
+        const searchPhoneE164 = toKzE164Phone(digits);
+        const { data: exactProfile, error: exactProfileError } = await supabase
+          .from('profiles')
+          .select('id, first_name, last_name, phone_number')
+          .eq('phone_number', searchPhoneE164)
+          .maybeSingle();
+
+        if (exactProfileError) throw exactProfileError;
+        if (!isMounted) return;
+
+        if (exactProfile) {
+          const fullName = `${exactProfile.first_name ?? ''} ${exactProfile.last_name ?? ''}`.trim();
+          setRecipientName(fullName || 'Получатель FinHub');
+          setRecipientUserId(exactProfile.id);
+          setRecipientLookupError(null);
+
+          const { data: matchedAccounts, error: matchedAccountsError } = await supabase
+            .from('accounts')
+            .select('id, bank')
+            .eq('user_id', exactProfile.id);
+
+          if (matchedAccountsError) throw matchedAccountsError;
+          if (!isMounted) return;
+
+          setRecipientAccounts(
+            (matchedAccounts ?? []).map((row) => ({
+              id: String((row as { id?: string }).id ?? ''),
+              bank: String((row as { bank?: string }).bank ?? '')
+            }))
+          );
+          return;
+        }
 
         const { data, error } = await supabase
           .from('profiles')
@@ -980,11 +1027,14 @@ const PaymentsPage = () => {
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-slate-300" htmlFor="phone">Номер телефона</label>
                     <input
+                      ref={phoneInputRef}
                       id="phone"
                       type="tel"
                       inputMode="numeric"
                       value={formatKzPhoneFromDigits(phoneDigits)}
                       onChange={(e) => setPhoneDigits(extractKzPhoneDigits(e.target.value))}
+                      onFocus={keepPhoneCaretAfterPrefix}
+                      onClick={keepPhoneCaretAfterPrefix}
                       placeholder="+7 (7xx) xxx-xx-xx"
                       className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                     />

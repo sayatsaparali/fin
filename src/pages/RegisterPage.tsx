@@ -5,6 +5,7 @@ import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
 import { ensureStandardAccountsForUser } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
+import { STANDARD_BANK_NAMES } from '../lib/standardBanks';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 const emailRegex = /\S+@\S+\.\S+/;
@@ -204,6 +205,42 @@ const RegisterPage = () => {
 
       try {
         await ensureStandardAccountsForUser(userId);
+
+        const { data: initializedByBankName, error: initializedByBankNameError } = await supabase
+          .from('accounts')
+          .select('bank_name')
+          .eq('user_id', userId)
+          .in('bank_name', [...STANDARD_BANK_NAMES]);
+
+        if (!initializedByBankNameError) {
+          const initializedNames = new Set(
+            (initializedByBankName ?? []).map((row) => String((row as { bank_name?: string }).bank_name ?? ''))
+          );
+          const hasAllAccounts = STANDARD_BANK_NAMES.every((bankName) => initializedNames.has(bankName));
+          if (!hasAllAccounts) {
+            setError('Ошибка инициализации банковских счетов');
+            return;
+          }
+        } else {
+          const { data: initializedByBank, error: initializedByBankError } = await supabase
+            .from('accounts')
+            .select('bank')
+            .eq('user_id', userId)
+            .in('bank', [...STANDARD_BANK_NAMES]);
+
+          if (initializedByBankError) {
+            throw initializedByBankError;
+          }
+
+          const initializedNames = new Set(
+            (initializedByBank ?? []).map((row) => String((row as { bank?: string }).bank ?? ''))
+          );
+          const hasAllAccounts = STANDARD_BANK_NAMES.every((bankName) => initializedNames.has(bankName));
+          if (!hasAllAccounts) {
+            setError('Ошибка инициализации банковских счетов');
+            return;
+          }
+        }
       } catch (starterAccountsError) {
         // eslint-disable-next-line no-console
         console.error('Supabase eternal accounts error:', starterAccountsError);

@@ -70,7 +70,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   // 1. Счета пользователя по банкам
   const { data: accountsByBankName, error: accountsByBankNameError } = await supabase
     .from('accounts')
-    .select('id, bank, bank_name, balance')
+    .select('id, bank_name, balance')
     .eq('user_id', user.id);
 
   let accounts = accountsByBankName;

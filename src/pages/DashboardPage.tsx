@@ -24,7 +24,8 @@ import {
   type FavoriteContact
 } from '../lib/favoritesApi';
 import { getSupabaseClient } from '../lib/supabaseClient';
-import { getBankMeta, KZ_BANKS } from '../lib/banks';
+import { getBankMeta } from '../lib/banks';
+import { STANDARD_BANK_NAMES, type StandardBankName } from '../lib/standardBanks';
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('ru-KZ', {
@@ -63,7 +64,7 @@ const DashboardPage = () => {
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isAddBankModalOpen, setIsAddBankModalOpen] = useState(false);
   const [isCreatingBank, setIsCreatingBank] = useState(false);
-  const [selectedNewBank, setSelectedNewBank] = useState(KZ_BANKS[0].name);
+  const [selectedNewBank, setSelectedNewBank] = useState<StandardBankName>('Kaspi');
   const [fromBank, setFromBank] = useState<'Kaspi' | 'Freedom' | 'Halyk' | 'Unified' | 'External'>(
     'Kaspi'
   );
@@ -243,11 +244,26 @@ const DashboardPage = () => {
         .from('accounts')
         .select('id')
         .eq('user_id', authUser.id)
-        .eq('bank', selectedNewBank)
+        .eq('bank_name', selectedNewBank)
         .maybeSingle();
 
       if (existingError) {
-        throw existingError;
+        const { data: existingAccountByBank, error: existingByBankError } = await supabase
+          .from('accounts')
+          .select('id')
+          .eq('user_id', authUser.id)
+          .eq('bank', selectedNewBank)
+          .maybeSingle();
+
+        if (existingByBankError) {
+          throw existingByBankError;
+        }
+
+        if (existingAccountByBank) {
+          setError(`Счет ${selectedNewBank} уже подключен.`);
+          setIsAddBankModalOpen(false);
+          return;
+        }
       }
 
       if (existingAccount) {
@@ -258,12 +274,19 @@ const DashboardPage = () => {
 
       const { error: insertError } = await supabase.from('accounts').insert({
         user_id: authUser.id,
-        bank: selectedNewBank,
+        bank_name: selectedNewBank,
         balance: 0
       });
 
       if (insertError) {
-        throw insertError;
+        const { error: insertByBankError } = await supabase.from('accounts').insert({
+          user_id: authUser.id,
+          bank: selectedNewBank,
+          balance: 0
+        });
+        if (insertByBankError) {
+          throw insertByBankError;
+        }
       }
 
       window.dispatchEvent(new Event('finhub:accounts-updated'));
@@ -754,23 +777,26 @@ const DashboardPage = () => {
               </div>
 
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {KZ_BANKS.map((bank) => (
-                  <button
-                    key={bank.id}
-                    type="button"
-                    onClick={() => setSelectedNewBank(bank.name)}
-                    className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
-                      selectedNewBank === bank.name
-                        ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                        : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                    }`}
-                  >
-                    <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.badgeTone}`}>
-                      {bank.logo}
-                    </span>
-                    <span>{bank.shortName}</span>
-                  </button>
-                ))}
+                {STANDARD_BANK_NAMES.map((bankName) => {
+                  const bankMeta = getBankMeta(bankName);
+                  return (
+                    <button
+                      key={bankName}
+                      type="button"
+                      onClick={() => setSelectedNewBank(bankName)}
+                      className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
+                        selectedNewBank === bankName
+                          ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                          : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                      }`}
+                    >
+                      <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
+                        {bankMeta.logo}
+                      </span>
+                      <span>{bankName}</span>
+                    </button>
+                  );
+                })}
               </div>
 
               <div className="mt-4 flex items-center justify-between gap-3 pt-2">
@@ -843,9 +869,9 @@ const DashboardPage = () => {
                         | 'External')
                     }
                   >
-                    <option value="Kaspi">Kaspi Gold</option>
+                    <option value="Kaspi">Kaspi</option>
                     <option value="Freedom">Freedom</option>
-                    <option value="Halyk">Halyk</option>
+                    <option value="Halyk">Halyk Bank</option>
                     <option value="Unified">Единый счёт FinHub</option>
                     <option value="External">Сторонние реквизиты</option>
                   </select>
@@ -866,9 +892,9 @@ const DashboardPage = () => {
                     }
                   >
                     <option value="Unified">Единый счёт FinHub (0%)</option>
-                    <option value="Kaspi">Kaspi Gold</option>
+                    <option value="Kaspi">Kaspi</option>
                     <option value="Freedom">Freedom</option>
-                    <option value="Halyk">Halyk</option>
+                    <option value="Halyk">Halyk Bank</option>
                     <option value="External">Сторонние реквизиты</option>
                   </select>
                 </div>

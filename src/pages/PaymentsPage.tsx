@@ -80,6 +80,76 @@ const STANDARD_TRANSFER_BANK_OPTIONS: Array<{ id: BankId; name: StandardBankName
   { id: 'bcc', name: 'BCC' }
 ];
 
+const fetchUserAccounts = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  userId: string
+): Promise<ConnectedAccount[]> => {
+  if (!supabase) return [];
+
+  const { data: rowsByBankName, error: rowsByBankNameError } = await supabase
+    .from('accounts')
+    .select('id, bank_name, balance')
+    .eq('user_id', userId)
+    .order('bank_name', { ascending: true });
+
+  if (!rowsByBankNameError) {
+    return (rowsByBankName ?? []).map((row) => ({
+      id: String((row as { id?: string }).id ?? ''),
+      bank: String((row as { bank_name?: string | null }).bank_name ?? 'Bank'),
+      balance: Number((row as { balance?: number | null }).balance ?? 0)
+    }));
+  }
+
+  const { data: rowsByBank, error: rowsByBankError } = await supabase
+    .from('accounts')
+    .select('id, bank, balance')
+    .eq('user_id', userId)
+    .order('bank', { ascending: true });
+
+  if (rowsByBankError) {
+    throw rowsByBankError;
+  }
+
+  return (rowsByBank ?? []).map((row) => ({
+    id: String((row as { id?: string }).id ?? ''),
+    bank: String((row as { bank?: string | null }).bank ?? 'Bank'),
+    balance: Number((row as { balance?: number | null }).balance ?? 0)
+  }));
+};
+
+const fetchRecipientAccounts = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  userId: string
+): Promise<RecipientAccount[]> => {
+  if (!supabase) return [];
+
+  const { data: rowsByBankName, error: rowsByBankNameError } = await supabase
+    .from('accounts')
+    .select('id, bank_name')
+    .eq('user_id', userId);
+
+  if (!rowsByBankNameError) {
+    return (rowsByBankName ?? []).map((row) => ({
+      id: String((row as { id?: string }).id ?? ''),
+      bank: String((row as { bank_name?: string | null }).bank_name ?? '')
+    }));
+  }
+
+  const { data: rowsByBank, error: rowsByBankError } = await supabase
+    .from('accounts')
+    .select('id, bank')
+    .eq('user_id', userId);
+
+  if (rowsByBankError) {
+    throw rowsByBankError;
+  }
+
+  return (rowsByBank ?? []).map((row) => ({
+    id: String((row as { id?: string }).id ?? ''),
+    bank: String((row as { bank?: string | null }).bank ?? '')
+  }));
+};
+
 const PaymentsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -159,33 +229,8 @@ const PaymentsPage = () => {
         }
         setAuthUserId(user.id);
 
-        const { data: rowsByBankName, error: accountsByBankNameError } = await supabase
-          .from('accounts')
-          .select('id, bank, bank_name, balance')
-          .eq('user_id', user.id)
-          .order('bank_name', { ascending: true });
-
-        let rows = rowsByBankName;
-        if (accountsByBankNameError) {
-          const { data: rowsByBank, error: accountsByBankError } = await supabase
-            .from('accounts')
-            .select('id, bank, balance')
-            .eq('user_id', user.id)
-            .order('bank', { ascending: true });
-
-          if (accountsByBankError) {
-            throw accountsByBankError;
-          }
-          rows = rowsByBank;
-        }
-
+        const normalized = await fetchUserAccounts(supabase, user.id);
         if (!isMounted) return;
-
-        const normalized: ConnectedAccount[] = (rows ?? []).map((row) => ({
-          id: String(row.id),
-          bank: String((row as { bank_name?: string; bank?: string }).bank_name ?? row.bank ?? 'Bank'),
-          balance: Number(row.balance ?? 0)
-        }));
 
         setAccounts(normalized);
         setFromAccountId((prev) => prev || normalized[0]?.id || '');
@@ -259,24 +304,10 @@ const PaymentsPage = () => {
           setRecipientUserId(exactProfile.id);
           setRecipientLookupError(null);
 
-          const { data: matchedAccounts, error: matchedAccountsError } = await supabase
-            .from('accounts')
-            .select('id, bank, bank_name')
-            .eq('user_id', exactProfile.id);
-
-          if (matchedAccountsError) throw matchedAccountsError;
+          const matchedAccounts = await fetchRecipientAccounts(supabase, exactProfile.id);
           if (!isMounted) return;
 
-          setRecipientAccounts(
-            (matchedAccounts ?? []).map((row) => ({
-              id: String((row as { id?: string }).id ?? ''),
-              bank: String(
-                (row as { bank_name?: string; bank?: string }).bank_name ??
-                  (row as { bank?: string }).bank ??
-                  ''
-              )
-            }))
-          );
+          setRecipientAccounts(matchedAccounts);
 
           const { data: selectedBankAccounts, error: selectedBankAccountsError } = await supabase
             .from('accounts')
@@ -292,13 +323,7 @@ const PaymentsPage = () => {
             console.log('Recipient accounts by user_id:', {
               userId: exactProfile.id,
               selectedBank,
-              availableBanks: (matchedAccounts ?? []).map((row) =>
-                String(
-                  (row as { bank_name?: string; bank?: string }).bank_name ??
-                    (row as { bank?: string }).bank ??
-                    ''
-                )
-              )
+              availableBanks: matchedAccounts.map((row) => row.bank)
             });
             setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
           } else {
@@ -332,24 +357,10 @@ const PaymentsPage = () => {
         setRecipientUserId(matched.id);
         setRecipientLookupError(null);
 
-        const { data: matchedAccounts, error: matchedAccountsError } = await supabase
-          .from('accounts')
-          .select('id, bank, bank_name')
-          .eq('user_id', matched.id);
-
-        if (matchedAccountsError) throw matchedAccountsError;
+        const matchedAccounts = await fetchRecipientAccounts(supabase, matched.id);
         if (!isMounted) return;
 
-        setRecipientAccounts(
-          (matchedAccounts ?? []).map((row) => ({
-            id: String((row as { id?: string }).id ?? ''),
-            bank: String(
-              (row as { bank_name?: string; bank?: string }).bank_name ??
-                (row as { bank?: string }).bank ??
-                ''
-            )
-          }))
-        );
+        setRecipientAccounts(matchedAccounts);
 
         const { data: selectedBankAccounts, error: selectedBankAccountsError } = await supabase
           .from('accounts')
@@ -365,13 +376,7 @@ const PaymentsPage = () => {
           console.log('Recipient accounts by user_id:', {
             userId: matched.id,
             selectedBank,
-            availableBanks: (matchedAccounts ?? []).map((row) =>
-              String(
-                (row as { bank_name?: string; bank?: string }).bank_name ??
-                  (row as { bank?: string }).bank ??
-                  ''
-              )
-            )
+            availableBanks: matchedAccounts.map((row) => row.bank)
           });
           setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
         } else {

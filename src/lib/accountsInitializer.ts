@@ -8,8 +8,8 @@ import {
 
 type AccountRow = {
   id: string;
-  bank?: string | null;
   bank_name?: string | null;
+  bank?: string | null;
 };
 
 const generateKzAccountNumber = () => {
@@ -21,20 +21,20 @@ const upsertBankLabels = async (id: string, bankName: StandardBankName) => {
   const supabase = getSupabaseClient();
   if (!supabase) return;
 
-  const { error: updateWithBankNameError } = await supabase
+  const { error: updateBankNameError } = await supabase
     .from('accounts')
-    .update({ bank_name: bankName, bank: bankName })
+    .update({ bank_name: bankName })
     .eq('id', id);
 
-  if (!updateWithBankNameError) return;
+  if (updateBankNameError) {
+    const { error: updateBankOnlyError } = await supabase
+      .from('accounts')
+      .update({ bank: bankName })
+      .eq('id', id);
 
-  const { error: updateBankOnlyError } = await supabase
-    .from('accounts')
-    .update({ bank: bankName })
-    .eq('id', id);
-
-  if (updateBankOnlyError) {
-    throw updateBankOnlyError;
+    if (updateBankOnlyError) {
+      throw updateBankOnlyError;
+    }
   }
 };
 
@@ -45,7 +45,6 @@ const insertStandardAccount = async (userId: string, bankName: StandardBankName)
   const payload = {
     user_id: userId,
     bank_name: bankName,
-    bank: bankName,
     balance: STANDARD_BANK_BALANCES[bankName],
     account_number: generateKzAccountNumber()
   };
@@ -80,7 +79,7 @@ export const ensureStandardAccountsForUser = async (
 
   const { data: accountsByBankName, error: accountsByBankNameError } = await supabase
     .from('accounts')
-    .select('id, bank_name, bank')
+    .select('id, bank_name')
     .eq('user_id', userId);
 
   let rows: AccountRow[] = [];

@@ -35,6 +35,8 @@ const DashboardPage = () => {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [profileFirstName, setProfileFirstName] = useState<string | null>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(true);
 
   const [smartPocket, setSmartPocket] = useState(250000);
   const [favoriteContacts, setFavoriteContacts] = useState<FavoriteContact[]>([]);
@@ -107,8 +109,47 @@ const DashboardPage = () => {
       }
     };
 
+    const loadProfile = async () => {
+      try {
+        setIsProfileLoading(true);
+        const supabase = getSupabaseClient();
+        if (!supabase) return;
+
+        const {
+          data: { user: authUser },
+          error: authError
+        } = await supabase.auth.getUser();
+
+        if (authError || !authUser) {
+          throw authError ?? new Error('Пользователь не найден.');
+        }
+
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('first_name')
+          .eq('id', authUser.id)
+          .maybeSingle();
+
+        if (profileError) {
+          throw profileError;
+        }
+
+        if (!isMounted) return;
+        const name = String((profileData as { first_name?: string | null } | null)?.first_name ?? '').trim();
+        setProfileFirstName(name || null);
+      } catch (profileLoadError) {
+        if (!isMounted) return;
+        // eslint-disable-next-line no-console
+        console.error('Failed to load profile first_name on dashboard:', profileLoadError);
+        setProfileFirstName(null);
+      } finally {
+        if (isMounted) setIsProfileLoading(false);
+      }
+    };
+
     load();
     loadFavorites();
+    loadProfile();
     const handleAccountsUpdated = () => {
       load();
     };
@@ -123,7 +164,9 @@ const DashboardPage = () => {
       window.removeEventListener('finhub:accounts-updated', handleAccountsUpdated);
       window.removeEventListener('finhub:favorites-updated', handleFavoritesUpdated);
     };
-  }, []);
+  }, [user?.email]);
+
+  const greetingName = profileFirstName || 'пользователь FinHub';
 
   const handleDeleteFavorite = async (favorite: FavoriteContact) => {
     try {
@@ -210,9 +253,13 @@ const DashboardPage = () => {
           </div>
           <div>
             <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Добро пожаловать</p>
-            <p className="text-base font-semibold text-slate-50 sm:text-lg">
-              {user?.email ?? 'Пользователь FinHub'}
-            </p>
+            {isProfileLoading ? (
+              <span className="mt-1 inline-block h-5 w-44 animate-pulse rounded bg-slate-700/70 sm:h-6 sm:w-56" />
+            ) : (
+              <p className="text-base font-semibold text-slate-50 sm:text-lg">
+                {`Добро пожаловать, ${greetingName}!`}
+              </p>
+            )}
           </div>
         </div>
 

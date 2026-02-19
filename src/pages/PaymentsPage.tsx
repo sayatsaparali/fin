@@ -87,6 +87,19 @@ const formatCardValue = (input: string) =>
     .replace(/(.{4})/g, '$1 ')
     .trim();
 
+const normalizePhoneDigits = (value: string | null | undefined) =>
+  String(value ?? '')
+    .replace(/\D/g, '')
+    .replace(/^8/, '7')
+    .slice(-10);
+
+type ProfileLookupRow = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone_number: string | null;
+};
+
 const PaymentsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -99,6 +112,11 @@ const PaymentsPage = () => {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [favorites, setFavorites] = useState<FavoriteContact[]>([]);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
+  const [ownPhoneDigits, setOwnPhoneDigits] = useState('');
+  const [recipientName, setRecipientName] = useState<string | null>(null);
+  const [recipientUserId, setRecipientUserId] = useState<string | null>(null);
+  const [isRecipientLookupLoading, setIsRecipientLookupLoading] = useState(false);
 
   const [fromAccountId, setFromAccountId] = useState<string>('');
   const [toAccountId, setToAccountId] = useState<string>('');
@@ -144,6 +162,7 @@ const PaymentsPage = () => {
         if (userError || !user) {
           throw userError ?? new Error('Пользователь не найден.');
         }
+        setAuthUserId(user.id);
 
         const { data: rows, error: accountsError } = await supabase
           .from('accounts')
@@ -166,6 +185,13 @@ const PaymentsPage = () => {
         setAccounts(normalized);
         setFromAccountId((prev) => prev || normalized[0]?.id || '');
         setToAccountId((prev) => prev || normalized[1]?.id || normalized[0]?.id || '');
+
+        const { data: ownProfile } = await supabase
+          .from('profiles')
+          .select('phone_number')
+          .eq('id', user.id)
+          .maybeSingle();
+        setOwnPhoneDigits(normalizePhoneDigits((ownProfile as { phone_number?: string } | null)?.phone_number));
       } catch (loadError) {
         // eslint-disable-next-line no-console
         console.error('Failed to load accounts for transfers:', loadError);
@@ -186,6 +212,70 @@ const PaymentsPage = () => {
       window.removeEventListener('finhub:accounts-updated', refreshHandler);
     };
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const lookupRecipientByPhone = async () => {
+      if (method !== 'phone') return;
+
+      const digits = getPhoneDigits(phone);
+      if (digits.length !== 10) {
+        if (!isMounted) return;
+        setRecipientName(null);
+        setRecipientUserId(null);
+        return;
+      }
+
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+
+      try {
+        setIsRecipientLookupLoading(true);
+
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, first_name, last_name, phone_number')
+          .not('phone_number', 'is', null);
+
+        if (error) throw error;
+        if (!isMounted) return;
+
+        const matched = (data as ProfileLookupRow[] | null)?.find(
+          (profile) => normalizePhoneDigits(profile.phone_number) === digits
+        );
+
+        if (!matched) {
+          setRecipientName(null);
+          setRecipientUserId(null);
+          return;
+        }
+
+        const fullName = `${matched.first_name ?? ''} ${matched.last_name ?? ''}`.trim();
+        setRecipientName(fullName || 'Получатель FinHub');
+        setRecipientUserId(matched.id);
+      } catch (lookupError) {
+        // eslint-disable-next-line no-console
+        console.error('Recipient lookup failed:', lookupError);
+      } finally {
+        if (isMounted) setIsRecipientLookupLoading(false);
+      }
+    };
+
+    lookupRecipientByPhone();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [method, phone]);
+
+  useEffect(() => {
+    if (method !== 'phone') {
+      setRecipientName(null);
+      setRecipientUserId(null);
+      setIsRecipientLookupLoading(false);
+    }
+  }, [method]);
 
   useEffect(() => {
     if (transferState?.quickFavorite) {
@@ -292,6 +382,8 @@ const PaymentsPage = () => {
 
   const applyFavoriteTransfer = (favorite: FavoriteContact) => {
     setError(null);
+    setRecipientName(null);
+    setRecipientUserId(null);
 
     const targetBankId = normalizeBankId(favorite.bank_name);
     setRecipientBankId(targetBankId === 'unknown' ? 'halyk' : targetBankId);
@@ -304,6 +396,7 @@ const PaymentsPage = () => {
     } else {
       setMethod('phone');
       setPhone(formatPhoneValue(favorite.phone_number));
+      setRecipientName(favorite.name);
     }
 
     setComment(`Перевод: ${favorite.name}`);
@@ -429,6 +522,50 @@ const PaymentsPage = () => {
 
   const commissionText = commission === 0 ? 'Без комиссии' : `Комиссия: ${formatCurrency(commission).replace('KZT', '₸')}`;
 
+  const createTransactionRecord = async (params: {
+    userId: string;
+    amount: number;
+    category: string;
+    counterparty: string;
+    bankName: string;
+    kind: 'income' | 'expense';
+  }) => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    const nowIso = new Date().toISOString();
+
+    const { error: newSchemaError } = await supabase.from('transactions').insert({
+      user_id: params.userId,
+      amount: params.amount,
+      category: params.category,
+      counterparty: params.counterparty,
+      date: nowIso
+    });
+
+    if (!newSchemaError) {
+      return;
+    }
+
+    const { error: legacyError } = await supabase.from('transactions').insert({
+      user_id: params.userId,
+      amount: params.amount,
+      type: params.kind,
+      description: params.category,
+      counterparty: params.counterparty,
+      occurred_at: nowIso,
+      bank: params.bankName
+    });
+
+    if (legacyError) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to insert transaction record:', {
+        newSchemaError,
+        legacyError
+      });
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -464,6 +601,17 @@ const PaymentsPage = () => {
       return;
     }
 
+    if (method === 'phone') {
+      const enteredPhoneDigits = getPhoneDigits(phone);
+      if (
+        (ownPhoneDigits && enteredPhoneDigits === ownPhoneDigits) ||
+        (recipientUserId && authUserId && recipientUserId === authUserId)
+      ) {
+        setError('Нельзя перевести деньги самому себе по номеру телефона.');
+        return;
+      }
+    }
+
     if (method === 'card' && cardNumber.replace(/\s/g, '').length !== 16) {
       setError('Введите корректный номер карты из 16 цифр.');
       return;
@@ -478,6 +626,10 @@ const PaymentsPage = () => {
     setIsSubmitting(true);
 
     try {
+      if (!authUserId) {
+        throw new Error('Не удалось определить пользователя для операции.');
+      }
+
       const sourceNewBalance = sourceAccount.balance - totalDebit;
 
       const { error: updateSourceError } = await supabase
@@ -504,12 +656,44 @@ const PaymentsPage = () => {
             return account;
           })
         );
+
+        await createTransactionRecord({
+          userId: authUserId,
+          amount: -totalDebit,
+          category: 'OWN_TRANSFER_OUT',
+          counterparty: destinationAccount.bank,
+          bankName: sourceAccount.bank,
+          kind: 'expense'
+        });
+        await createTransactionRecord({
+          userId: authUserId,
+          amount: amountValue,
+          category: 'OWN_TRANSFER_IN',
+          counterparty: sourceAccount.bank,
+          bankName: destinationAccount.bank,
+          kind: 'income'
+        });
       } else {
         setAccounts((prev) =>
           prev.map((account) =>
             account.id === sourceAccount.id ? { ...account, balance: sourceNewBalance } : account
           )
         );
+
+        const transferCategory = method === 'phone' ? 'SMP_PHONE_TRANSFER' : 'CARD_TRANSFER';
+        const transferCounterparty =
+          method === 'phone'
+            ? recipientName ?? `Телефон ${phone.slice(-4)}`
+            : `Карта ${cardNumber.replace(/\D/g, '').slice(-4)}`;
+
+        await createTransactionRecord({
+          userId: authUserId,
+          amount: -totalDebit,
+          category: transferCategory,
+          counterparty: transferCounterparty,
+          bankName: sourceAccount.bank,
+          kind: 'expense'
+        });
       }
 
       if (method === 'phone' && sourceBankId !== recipientBankId) {
@@ -533,7 +717,7 @@ const PaymentsPage = () => {
           setLastTransferDraft({
             name:
               method === 'phone'
-                ? `Контакт ${phone.slice(-4)}`
+                ? recipientName ?? `Контакт ${phone.slice(-4)}`
                 : `Карта ${draftValue.slice(-4)}`,
             phone_number: draftValue,
             bank_name: recipientMeta?.name ?? destinationBankMeta.name,
@@ -748,6 +932,17 @@ const PaymentsPage = () => {
                       placeholder="+7 (7xx) xxx-xx-xx"
                       className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                     />
+                    {isRecipientLookupLoading && getPhoneDigits(phone).length === 10 && (
+                      <p className="text-xs text-slate-400">Поиск получателя...</p>
+                    )}
+                    {!isRecipientLookupLoading && recipientName && (
+                      <p className="text-xs text-emerald-300">Получатель: {recipientName}</p>
+                    )}
+                    {!isRecipientLookupLoading && getPhoneDigits(phone).length === 10 && !recipientName && (
+                      <p className="text-xs text-slate-500">
+                        Контакт не найден в FinHub. Перевод будет отправлен по реквизитам банка.
+                      </p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -848,6 +1043,9 @@ const PaymentsPage = () => {
                     <span>{method === 'own' ? destinationAccount?.bank ?? '—' : destinationBankMeta.shortName}</span>
                   </span>
                 </div>
+                {method === 'phone' && recipientName && (
+                  <p className="mt-2 text-[11px] text-emerald-300">Получатель: {recipientName}</p>
+                )}
               </div>
 
               <div className="space-y-2">

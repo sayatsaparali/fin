@@ -50,7 +50,47 @@ const normalizeBirthDate = (day: string, month: string, year: string): string | 
     .padStart(2, '0')}`;
 };
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const normalizePhoneDigits = (input: string) => {
+  let digits = input.replace(/\D/g, '');
+  const hasPlusSevenPrefix = input.trim().startsWith('+7');
+
+  if (digits.startsWith('8')) {
+    digits = `7${digits.slice(1)}`;
+  }
+
+  // Remove country code only when it is clearly present.
+  if ((hasPlusSevenPrefix && digits.startsWith('7')) || digits.length === 11) {
+    digits = digits.slice(1);
+  }
+
+  return digits.slice(0, 10);
+};
+
+const formatPhoneValue = (digitsInput: string) => {
+  const digits = digitsInput.slice(0, 10);
+
+  const p1 = digits.slice(0, 3);
+  const p2 = digits.slice(3, 6);
+  const p3 = digits.slice(6, 8);
+  const p4 = digits.slice(8, 10);
+
+  let result = '+7';
+  if (p1) result += ` (${p1}`;
+  if (p1.length === 3) result += ')';
+  if (p2) result += ` ${p2}`;
+  if (p3) result += `-${p3}`;
+  if (p4) result += `-${p4}`;
+
+  return result;
+};
+
+const formatSupabaseError = (
+  title: string,
+  error: { message: string; details?: string; hint?: string; code?: string }
+) =>
+  `${title}: ${error.message}${error.details ? ` | details: ${error.details}` : ''}${
+    error.hint ? ` | hint: ${error.hint}` : ''
+  }${error.code ? ` | code: ${error.code}` : ''}`;
 
 const RegisterPage = () => {
   const { login } = useUser();
@@ -64,6 +104,7 @@ const RegisterPage = () => {
   const [birthYear, setBirthYear] = useState('');
 
   const [email, setEmail] = useState('');
+  const [phoneDigits, setPhoneDigits] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [agreedPersonalData, setAgreedPersonalData] = useState(false);
@@ -81,6 +122,7 @@ const RegisterPage = () => {
   const isStep2Valid = Boolean(birthDate);
   const isStep3FieldsValid =
     emailRegex.test(email) &&
+    phoneDigits.length === 10 &&
     password.length >= 6 &&
     password === confirmPassword &&
     agreedPersonalData &&
@@ -112,6 +154,7 @@ const RegisterPage = () => {
       }
 
       // Регистрация через Supabase Auth с метаданными для FinHub
+      const normalizedPhone = `+7${phoneDigits}`;
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
@@ -121,36 +164,115 @@ const RegisterPage = () => {
             senderName: 'FinHub Support',
             first_name: firstName.trim(),
             last_name: lastName.trim(),
-            birth_date: birthDate
+            birth_date: birthDate,
+            phone_number: normalizedPhone
           }
         }
       });
 
       if (signUpError) {
         // eslint-disable-next-line no-console
-        console.error('Supabase signUp error:', {
-          message: signUpError.message,
-          details: signUpError.details,
-          hint: signUpError.hint,
-          code: signUpError.code
-        });
-        const isAlreadyRegistered =
-          signUpError.message.toLowerCase().includes('already') ||
-          signUpError.message.toLowerCase().includes('registered') ||
-          signUpError.message.toLowerCase().includes('exists');
-        setError(
-          isAlreadyRegistered
-            ? 'Этот email уже зарегистрирован. Используйте вход в FinHub.'
-            : 'Не удалось создать аккаунт. Проверьте данные и попробуйте ещё раз.'
-        );
-        // eslint-disable-next-line no-console
         console.error(signUpError);
+        setError(
+          formatSupabaseError('Ошибка регистрации', {
+            message: signUpError.message,
+            details: signUpError.details ?? undefined,
+            hint: signUpError.hint ?? undefined,
+            code: signUpError.code ?? undefined
+          })
+        );
         return;
       }
 
-      // Автоматический вход сразу после регистрации (без окна подтверждения почты)
-      let hasSession = Boolean(signUpData.session);
+      const userId = signUpData.user?.id;
+      if (!userId) {
+        setError('Auth вернул пустой user.id. Профиль не может быть создан.');
+        return;
+      }
 
+      // Прямая запись профиля сразу после signUp
+      const baseProfilePayload = {
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        phone_number: normalizedPhone,
+        birth_date: birthDate
+      };
+
+      const { error: profileUpsertError } = await supabase
+        .from('profiles')
+        .upsert(
+          {
+            id: userId,
+            ...baseProfilePayload
+          },
+          { onConflict: 'id' }
+        );
+
+      if (profileUpsertError) {
+        // eslint-disable-next-line no-console
+        console.error('Supabase profiles upsert error:', profileUpsertError);
+        setError(
+          formatSupabaseError('Ошибка записи профиля', {
+            message: profileUpsertError.message,
+            details: profileUpsertError.details ?? undefined,
+            hint: profileUpsertError.hint ?? undefined,
+            code: profileUpsertError.code ?? undefined
+          })
+        );
+        return;
+      }
+
+      const starterBanks = ['Kaspi Gold', 'Halyk Bank'] as const;
+      const { data: existingStarterAccounts, error: existingAccountsError } = await supabase
+        .from('accounts')
+        .select('bank')
+        .eq('user_id', userId)
+        .in('bank', [...starterBanks]);
+
+      if (existingAccountsError) {
+        // eslint-disable-next-line no-console
+        console.error('Supabase accounts pre-check error:', existingAccountsError);
+        setError(
+          formatSupabaseError('Ошибка проверки стартовых счетов', {
+            message: existingAccountsError.message,
+            details: existingAccountsError.details ?? undefined,
+            hint: existingAccountsError.hint ?? undefined,
+            code: existingAccountsError.code ?? undefined
+          })
+        );
+        return;
+      }
+
+      const existingBanks = new Set(
+        (existingStarterAccounts ?? []).map((row) => String((row as { bank?: string }).bank ?? ''))
+      );
+      const starterRows = starterBanks
+        .filter((bank) => !existingBanks.has(bank))
+        .map((bank) => ({
+          user_id: userId,
+          bank,
+          balance: 0
+        }));
+
+      if (starterRows.length > 0) {
+        const { error: starterAccountsError } = await supabase.from('accounts').insert(starterRows);
+        if (starterAccountsError) {
+          // eslint-disable-next-line no-console
+          console.error('Supabase starter accounts insert error:', starterAccountsError);
+          setError(
+            formatSupabaseError('Ошибка создания стартовых счетов', {
+              message: starterAccountsError.message,
+              details: starterAccountsError.details ?? undefined,
+              hint: starterAccountsError.hint ?? undefined,
+              code: starterAccountsError.code ?? undefined
+            })
+          );
+          return;
+        }
+      }
+
+      // Автоматический вход после успешного signUp + insert профиля
+      let hasSession = Boolean(signUpData.session);
       if (!hasSession) {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
@@ -159,58 +281,23 @@ const RegisterPage = () => {
 
         if (signInError) {
           // eslint-disable-next-line no-console
-          console.error('Supabase signInWithPassword after signUp error:', {
-            message: signInError.message,
-            details: signInError.details,
-            hint: signInError.hint,
-            code: signInError.code
-          });
-          // eslint-disable-next-line no-console
           console.error(signInError);
           setError(
-            'Аккаунт создан, но не удалось выполнить автоматический вход. Войдите вручную на странице входа.'
+            formatSupabaseError('Профиль создан, но вход не выполнен', {
+              message: signInError.message,
+              details: signInError.details ?? undefined,
+              hint: signInError.hint ?? undefined,
+              code: signInError.code ?? undefined
+            })
           );
           return;
         }
-
         hasSession = true;
       }
 
       if (!hasSession) {
-        setError('Не удалось открыть сессию пользователя. Попробуйте войти вручную.');
+        setError('Профиль создан, но сессия не активна. Выполните вход вручную.');
         return;
-      }
-
-      // После успешного Auth пишем профиль (поля совпадают с колонками profiles)
-      const userId = signUpData.user?.id;
-      if (userId) {
-        try {
-          // Даем Supabase небольшую паузу, чтобы сессия успела полностью примениться
-          await wait(500);
-
-          const { error: profileError } = await supabase.from('profiles').upsert(
-            {
-              user_id: userId,
-              first_name: firstName.trim(),
-              last_name: lastName.trim(),
-              birth_date: birthDate
-            },
-            { onConflict: 'user_id' }
-          );
-
-          if (profileError) {
-            // eslint-disable-next-line no-console
-            console.error('Supabase profiles upsert error (non-blocking):', {
-              message: profileError.message,
-              details: profileError.details,
-              hint: profileError.hint,
-              code: profileError.code
-            });
-          }
-        } catch (profileUnexpectedError) {
-          // eslint-disable-next-line no-console
-          console.error('Unexpected profiles save error (non-blocking):', profileUnexpectedError);
-        }
       }
 
       login(email, true);
@@ -380,6 +467,22 @@ const RegisterPage = () => {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@example.com"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300" htmlFor="phoneNumber">
+                  Номер телефона
+                </label>
+                <input
+                  id="phoneNumber"
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                  value={formatPhoneValue(phoneDigits)}
+                  onChange={(e) => setPhoneDigits(normalizePhoneDigits(e.target.value))}
+                  placeholder="+7 (7xx) xxx-xx-xx"
                 />
               </div>
 

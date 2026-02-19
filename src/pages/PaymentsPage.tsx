@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ContactRound,
   CreditCard,
+  Loader2,
   Plus,
   QrCode,
   SendHorizontal,
@@ -23,8 +24,13 @@ import {
   type FavoriteContact,
   type NewFavoriteContactInput
 } from '../lib/favoritesApi';
+import { ensureStandardAccountsForUser } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
-import { STANDARD_BANK_NAMES, type StandardBankName } from '../lib/standardBanks';
+import {
+  normalizeToStandardBankName,
+  STANDARD_BANK_NAMES,
+  type StandardBankName
+} from '../lib/standardBanks';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type TransferMethod = 'own' | 'phone' | 'card';
@@ -95,7 +101,9 @@ const fetchUserAccounts = async (
   if (!rowsByBankNameError) {
     return (rowsByBankName ?? []).map((row) => ({
       id: String((row as { id?: string }).id ?? ''),
-      bank: String((row as { bank_name?: string | null }).bank_name ?? 'Bank'),
+      bank:
+        normalizeToStandardBankName((row as { bank_name?: string | null }).bank_name) ??
+        String((row as { bank_name?: string | null }).bank_name ?? 'Bank'),
       balance: Number((row as { balance?: number | null }).balance ?? 0)
     }));
   }
@@ -112,7 +120,9 @@ const fetchUserAccounts = async (
 
   return (rowsByBank ?? []).map((row) => ({
     id: String((row as { id?: string }).id ?? ''),
-    bank: String((row as { bank?: string | null }).bank ?? 'Bank'),
+    bank:
+      normalizeToStandardBankName((row as { bank?: string | null }).bank) ??
+      String((row as { bank?: string | null }).bank ?? 'Bank'),
     balance: Number((row as { balance?: number | null }).balance ?? 0)
   }));
 };
@@ -131,7 +141,9 @@ const fetchRecipientAccounts = async (
   if (!rowsByBankNameError) {
     return (rowsByBankName ?? []).map((row) => ({
       id: String((row as { id?: string }).id ?? ''),
-      bank: String((row as { bank_name?: string | null }).bank_name ?? '')
+      bank:
+        normalizeToStandardBankName((row as { bank_name?: string | null }).bank_name) ??
+        String((row as { bank_name?: string | null }).bank_name ?? '')
     }));
   }
 
@@ -146,8 +158,32 @@ const fetchRecipientAccounts = async (
 
   return (rowsByBank ?? []).map((row) => ({
     id: String((row as { id?: string }).id ?? ''),
-    bank: String((row as { bank?: string | null }).bank ?? '')
+    bank:
+      normalizeToStandardBankName((row as { bank?: string | null }).bank) ??
+      String((row as { bank?: string | null }).bank ?? '')
   }));
+};
+
+const logRecipientAccountsDiagnostics = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  userId: string
+) => {
+  if (!supabase) return;
+  // eslint-disable-next-line no-console
+  console.log('Наден пользователь ID:', userId);
+  const { data: accounts, error } = await supabase
+    .from('accounts')
+    .select('*')
+    .eq('user_id', userId);
+
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.log('Найденные счета получателя: ошибка чтения', error);
+    return;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log('Найденные счета получателя:', accounts);
 };
 
 const PaymentsPage = () => {
@@ -178,8 +214,6 @@ const PaymentsPage = () => {
   const [cardNumber, setCardNumber] = useState('');
   const [amount, setAmount] = useState('');
   const [comment, setComment] = useState('');
-
-  const [monthlySmpUsed, setMonthlySmpUsed] = useState(0);
 
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
@@ -230,11 +264,18 @@ const PaymentsPage = () => {
         setAuthUserId(user.id);
 
         const normalized = await fetchUserAccounts(supabase, user.id);
+        if (normalized.length === 0) {
+          await ensureStandardAccountsForUser(user.id);
+        }
+        const normalizedAfterInit =
+          normalized.length > 0 ? normalized : await fetchUserAccounts(supabase, user.id);
         if (!isMounted) return;
 
-        setAccounts(normalized);
-        setFromAccountId((prev) => prev || normalized[0]?.id || '');
-        setToAccountId((prev) => prev || normalized[1]?.id || normalized[0]?.id || '');
+        setAccounts(normalizedAfterInit);
+        setFromAccountId((prev) => prev || normalizedAfterInit[0]?.id || '');
+        setToAccountId(
+          (prev) => prev || normalizedAfterInit[1]?.id || normalizedAfterInit[0]?.id || ''
+        );
 
         const { data: ownProfile } = await supabase
           .from('profiles')
@@ -270,7 +311,8 @@ const PaymentsPage = () => {
 
     const lookupRecipientByPhone = async () => {
       if (method !== 'phone') return;
-      const selectedBank = mapRecipientBankToDbName(recipientBankId);
+      const selectedBank =
+        normalizeToStandardBankName(mapRecipientBankToDbName(recipientBankId)) ?? 'Kaspi';
 
       const digits = phoneDigits;
       if (digits.length !== 10) {
@@ -288,6 +330,43 @@ const PaymentsPage = () => {
       try {
         setIsRecipientLookupLoading(true);
 
+        const applyRecipientDiagnostics = async (profile: ProfileLookupRow) => {
+          const fullName = `${profile.first_name ?? ''} ${profile.last_name ?? ''}`.trim();
+          setRecipientName(fullName || 'Получатель FinHub');
+          setRecipientUserId(profile.id);
+          setRecipientLookupError(null);
+
+          await logRecipientAccountsDiagnostics(supabase, profile.id);
+
+          const matchedAccounts = await fetchRecipientAccounts(supabase, profile.id);
+          if (!isMounted) return;
+          setRecipientAccounts(matchedAccounts);
+
+          if (matchedAccounts.length === 0) {
+            setRecipientLookupError('У пользователя не открыто ни одного банковского счета');
+            return;
+          }
+
+          const { data: selectedBankAccounts, error: selectedBankAccountsError } = await supabase
+            .from('accounts')
+            .select('id')
+            .eq('user_id', profile.id)
+            .eq('bank_name', selectedBank)
+            .limit(1);
+
+          if (selectedBankAccountsError) throw selectedBankAccountsError;
+
+          if (!selectedBankAccounts || selectedBankAccounts.length === 0) {
+            const availableBanks = matchedAccounts.map((row) => row.bank).join(', ');
+            setRecipientLookupError(
+              `У получателя есть счета в ${availableBanks}, но нет счета в ${selectedBank}`
+            );
+            return;
+          }
+
+          setRecipientLookupError(null);
+        };
+
         const searchPhoneE164 = toKzE164Phone(digits);
         const { data: exactProfile, error: exactProfileError } = await supabase
           .from('profiles')
@@ -299,36 +378,7 @@ const PaymentsPage = () => {
         if (!isMounted) return;
 
         if (exactProfile) {
-          const fullName = `${exactProfile.first_name ?? ''} ${exactProfile.last_name ?? ''}`.trim();
-          setRecipientName(fullName || 'Получатель FinHub');
-          setRecipientUserId(exactProfile.id);
-          setRecipientLookupError(null);
-
-          const matchedAccounts = await fetchRecipientAccounts(supabase, exactProfile.id);
-          if (!isMounted) return;
-
-          setRecipientAccounts(matchedAccounts);
-
-          const { data: selectedBankAccounts, error: selectedBankAccountsError } = await supabase
-            .from('accounts')
-            .select('*')
-            .eq('user_id', exactProfile.id)
-            .eq('bank_name', selectedBank)
-            .limit(1);
-
-          if (selectedBankAccountsError) throw selectedBankAccountsError;
-
-          if (!selectedBankAccounts || selectedBankAccounts.length === 0) {
-            // eslint-disable-next-line no-console
-            console.log('Recipient accounts by user_id:', {
-              userId: exactProfile.id,
-              selectedBank,
-              availableBanks: matchedAccounts.map((row) => row.bank)
-            });
-            setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
-          } else {
-            setRecipientLookupError(null);
-          }
+          await applyRecipientDiagnostics(exactProfile as ProfileLookupRow);
           return;
         }
 
@@ -348,40 +398,11 @@ const PaymentsPage = () => {
           setRecipientName(null);
           setRecipientUserId(null);
           setRecipientAccounts([]);
-          setRecipientLookupError('Пользователь с таким номером не зарегистрирован в FinHub');
+          setRecipientLookupError('Пользователь с таким номером еще не зарегистрирован в FinHub');
           return;
         }
 
-        const fullName = `${matched.first_name ?? ''} ${matched.last_name ?? ''}`.trim();
-        setRecipientName(fullName || 'Получатель FinHub');
-        setRecipientUserId(matched.id);
-        setRecipientLookupError(null);
-
-        const matchedAccounts = await fetchRecipientAccounts(supabase, matched.id);
-        if (!isMounted) return;
-
-        setRecipientAccounts(matchedAccounts);
-
-        const { data: selectedBankAccounts, error: selectedBankAccountsError } = await supabase
-          .from('accounts')
-          .select('*')
-          .eq('user_id', matched.id)
-          .eq('bank_name', selectedBank)
-          .limit(1);
-
-        if (selectedBankAccountsError) throw selectedBankAccountsError;
-
-        if (!selectedBankAccounts || selectedBankAccounts.length === 0) {
-          // eslint-disable-next-line no-console
-          console.log('Recipient accounts by user_id:', {
-            userId: matched.id,
-            selectedBank,
-            availableBanks: matchedAccounts.map((row) => row.bank)
-          });
-          setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
-        } else {
-          setRecipientLookupError(null);
-        }
+        await applyRecipientDiagnostics(matched);
       } catch (lookupError) {
         // eslint-disable-next-line no-console
         console.error('Recipient lookup failed:', lookupError);
@@ -452,61 +473,6 @@ const PaymentsPage = () => {
     };
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadMonthlySmpVolume = async () => {
-      const supabase = getSupabaseClient();
-      if (!supabase) return;
-
-      try {
-        const {
-          data: { user }
-        } = await supabase.auth.getUser();
-
-        if (!user) return;
-
-        const monthStart = new Date();
-        monthStart.setDate(1);
-        monthStart.setHours(0, 0, 0, 0);
-
-        const { data: newSchemaData, error: newSchemaError } = await supabase
-          .from('transactions')
-          .select('amount')
-          .eq('user_id', user.id)
-          .eq('category', 'SMP_PHONE_TRANSFER')
-          .gte('date', monthStart.toISOString());
-
-        if (!newSchemaError) {
-          const total = (newSchemaData ?? []).reduce((acc, row) => acc + Math.abs(Number(row.amount ?? 0)), 0);
-          if (isMounted) setMonthlySmpUsed(total);
-          return;
-        }
-
-        const { data: legacyData, error: legacyError } = await supabase
-          .from('transactions')
-          .select('amount')
-          .eq('user_id', user.id)
-          .eq('description', 'SMP_PHONE_TRANSFER')
-          .gte('occurred_at', monthStart.toISOString());
-
-        if (legacyError) throw legacyError;
-
-        const total = (legacyData ?? []).reduce((acc, row) => acc + Math.abs(Number(row.amount ?? 0)), 0);
-        if (isMounted) setMonthlySmpUsed(total);
-      } catch (volumeError) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to load monthly SMP volume:', volumeError);
-      }
-    };
-
-    loadMonthlySmpVolume();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
   const sourceAccount = accounts.find((account) => account.id === fromAccountId) ?? null;
   const destinationAccount = accounts.find((account) => account.id === toAccountId) ?? null;
 
@@ -515,6 +481,8 @@ const PaymentsPage = () => {
   const recipientAccountForPhone =
     recipientAccounts.find((account) => normalizeBankId(account.bank) === recipientBankId) ?? null;
   const recipientPhoneBankId = normalizeBankId(recipientAccountForPhone?.bank);
+  const hasRecipientBankAccount = (bankName: StandardBankName) =>
+    recipientAccounts.some((account) => account.bank === bankName);
 
   const applyFavoriteTransfer = (favorite: FavoriteContact) => {
     setError(null);
@@ -626,8 +594,6 @@ const PaymentsPage = () => {
 
     if (method === 'phone') {
       if (sourceBankId === recipientPhoneBankId) return 0;
-      const projectedMonthVolume = monthlySmpUsed + amountValue;
-      if (projectedMonthVolume <= 500000) return 0;
       return Math.round(amountValue * 0.005);
     }
 
@@ -648,7 +614,7 @@ const PaymentsPage = () => {
     }
 
     return Math.max(Math.round(amountValue * 0.007), 250);
-  }, [amountValue, method, sourceBankId, recipientBankId, recipientPhoneBankId, monthlySmpUsed]);
+  }, [amountValue, method, sourceBankId, recipientBankId, recipientPhoneBankId]);
 
   const totalDebit = Math.max(0, amountValue + commission);
   const insufficientFunds = Boolean(sourceAccount && totalDebit > sourceAccount.balance);
@@ -659,7 +625,7 @@ const PaymentsPage = () => {
     setScreen('form');
   };
 
-  const commissionText = commission === 0 ? 'Без комиссии' : `Комиссия: ${formatCurrency(commission).replace('KZT', '₸')}`;
+  const commissionText = `Комиссия: ${formatCurrency(commission).replace('KZT', '₸')}`;
 
   const createTransactionRecord = async (params: {
     userId: string;
@@ -775,7 +741,7 @@ const PaymentsPage = () => {
       }
 
       if (!recipientAccountForPhone) {
-        setError('У получателя нет счета в выбранном банке.');
+        setError('У получателя нет счета в этом банке');
         return;
       }
     }
@@ -846,6 +812,36 @@ const PaymentsPage = () => {
           kind: 'income'
         });
       } else if (method === 'phone') {
+        // eslint-disable-next-line no-console
+        console.log('Transfer recipient user_id:', recipientUserId);
+
+        const { data: recipientAccountStrict, error: recipientAccountStrictError } = await supabase
+          .from('accounts')
+          .select('id')
+          .eq('id', recipientAccountForPhone?.id ?? '')
+          .eq('user_id', recipientUserId)
+          .eq('bank_name', selectedRecipientBankName)
+          .maybeSingle();
+
+        if (recipientAccountStrictError) {
+          const { data: recipientAccountFallback, error: recipientAccountFallbackError } =
+            await supabase
+              .from('accounts')
+              .select('id')
+              .eq('id', recipientAccountForPhone?.id ?? '')
+              .eq('user_id', recipientUserId)
+              .eq('bank', selectedRecipientBankName)
+              .maybeSingle();
+
+          if (recipientAccountFallbackError || !recipientAccountFallback) {
+            setError('У получателя нет счета в этом банке');
+            return;
+          }
+        } else if (!recipientAccountStrict) {
+          setError('У получателя нет счета в этом банке');
+          return;
+        }
+
         const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
           p_sender_user_id: authUserId,
           p_sender_account_id: sourceAccount.id,
@@ -897,10 +893,6 @@ const PaymentsPage = () => {
           bankName: sourceAccount.bank,
           kind: 'expense'
         });
-      }
-
-      if (method === 'phone' && sourceBankId !== recipientPhoneBankId) {
-        setMonthlySmpUsed((prev) => prev + amountValue);
       }
 
       window.dispatchEvent(new Event('finhub:accounts-updated'));
@@ -1130,18 +1122,25 @@ const PaymentsPage = () => {
                 <>
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-slate-300" htmlFor="phone">Номер телефона</label>
-                    <input
-                      ref={phoneInputRef}
-                      id="phone"
-                      type="tel"
-                      inputMode="numeric"
-                      value={formatKzPhoneFromDigits(phoneDigits)}
-                      onChange={(e) => setPhoneDigits(extractKzPhoneDigits(e.target.value))}
-                      onFocus={keepPhoneCaretAfterPrefix}
-                      onClick={keepPhoneCaretAfterPrefix}
-                      placeholder="+7 (7xx) xxx-xx-xx"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
-                    />
+                    <div className="relative">
+                      <input
+                        ref={phoneInputRef}
+                        id="phone"
+                        type="tel"
+                        inputMode="numeric"
+                        value={formatKzPhoneFromDigits(phoneDigits)}
+                        onChange={(e) => setPhoneDigits(extractKzPhoneDigits(e.target.value))}
+                        onFocus={keepPhoneCaretAfterPrefix}
+                        onClick={keepPhoneCaretAfterPrefix}
+                        placeholder="+7 (7xx) xxx-xx-xx"
+                        className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 pr-10 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
+                      />
+                      {isRecipientLookupLoading && phoneDigits.length === 10 && (
+                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-emerald-300">
+                          <Loader2 size={16} className="animate-spin" />
+                        </span>
+                      )}
+                    </div>
                     {isRecipientLookupLoading && phoneDigits.length === 10 && (
                       <p className="text-xs text-slate-400">Поиск получателя...</p>
                     )}
@@ -1150,17 +1149,18 @@ const PaymentsPage = () => {
                     )}
                     {!isRecipientLookupLoading && recipientName && recipientAccounts.length > 0 && (
                       <p className="text-xs text-slate-400">
-                        Счета получателя: {recipientAccounts.map((acc) => acc.bank).join(', ')}
+                        Доступные счета: {recipientAccounts.map((acc) => acc.bank).join(', ')}
                       </p>
                     )}
                     {!isRecipientLookupLoading && phoneDigits.length === 10 && !recipientName && (
                       <p className="text-xs text-rose-300">
-                        {recipientLookupError ?? 'Пользователь с таким номером не зарегистрирован в FinHub'}
+                        {recipientLookupError ??
+                          'Пользователь с таким номером еще не зарегистрирован в FinHub'}
                       </p>
                     )}
                     {!isRecipientLookupLoading && recipientName && !recipientAccountForPhone && (
                       <p className="text-xs text-rose-300">
-                        У получателя нет счета в выбранном банке.
+                        {recipientLookupError ?? 'У получателя нет счета в этом банке'}
                       </p>
                     )}
                   </div>
@@ -1170,15 +1170,27 @@ const PaymentsPage = () => {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {STANDARD_TRANSFER_BANK_OPTIONS.map((bank) => {
                         const bankMeta = getBankMeta(bank.name);
+                        const isBankAvailable =
+                          recipientAccounts.length === 0 ? false : hasRecipientBankAccount(bank.name);
+                        const disableBankOption =
+                          Boolean(recipientName) &&
+                          !isBankAvailable;
+                        const optionTone = disableBankOption
+                          ? 'border-slate-700 bg-slate-900/70 text-slate-500'
+                          : recipientBankId === bank.id
+                            ? 'border-emerald-400/80 bg-emerald-500/15 text-emerald-200'
+                            : 'border-emerald-700/60 bg-emerald-500/10 text-emerald-300 hover:border-emerald-500/80';
                         return (
                         <button
                           key={bank.id}
                           type="button"
-                          onClick={() => setRecipientBankId(bank.id)}
-                          className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
-                            recipientBankId === bank.id
-                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                          onClick={() => {
+                            if (disableBankOption) return;
+                            setRecipientBankId(bank.id);
+                          }}
+                          disabled={disableBankOption}
+                          className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${optionTone} ${
+                            disableBankOption ? 'cursor-not-allowed opacity-60' : ''
                           }`}
                         >
                           <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>

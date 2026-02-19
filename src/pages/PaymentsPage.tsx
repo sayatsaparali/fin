@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
-import { BankId, getBankMeta, KZ_BANKS, normalizeBankId } from '../lib/banks';
+import { BankId, getBankMeta, normalizeBankId } from '../lib/banks';
 import {
   addFavoriteContact,
   fetchFavoriteContacts,
@@ -24,6 +24,7 @@ import {
   type NewFavoriteContactInput
 } from '../lib/favoritesApi';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
+import { STANDARD_BANK_NAMES, type StandardBankName } from '../lib/standardBanks';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type TransferMethod = 'own' | 'phone' | 'card';
@@ -66,12 +67,18 @@ type RecipientAccount = {
   bank: string;
 };
 
-const mapRecipientBankToDbName = (bankId: BankId): string => {
+const mapRecipientBankToDbName = (bankId: BankId): StandardBankName => {
   if (bankId === 'kaspi') return 'Kaspi';
-  if (bankId === 'halyk') return 'Halyk';
+  if (bankId === 'halyk') return 'Halyk Bank';
   if (bankId === 'bcc') return 'BCC';
-  return KZ_BANKS.find((bank) => bank.id === bankId)?.name ?? 'Halyk';
+  return 'Halyk Bank';
 };
+
+const STANDARD_TRANSFER_BANK_OPTIONS: Array<{ id: BankId; name: StandardBankName }> = [
+  { id: 'kaspi', name: 'Kaspi' },
+  { id: 'halyk', name: 'Halyk Bank' },
+  { id: 'bcc', name: 'BCC' }
+];
 
 const PaymentsPage = () => {
   const navigate = useNavigate();
@@ -114,7 +121,7 @@ const PaymentsPage = () => {
 
   const [newFavoriteName, setNewFavoriteName] = useState('');
   const [newFavoriteCategory, setNewFavoriteCategory] = useState<FavoriteCategory>('phone');
-  const [newFavoriteBankName, setNewFavoriteBankName] = useState(KZ_BANKS[0].name);
+  const [newFavoriteBankName, setNewFavoriteBankName] = useState<StandardBankName>('Kaspi');
   const [newFavoriteValue, setNewFavoriteValue] = useState('');
   const [newFavoriteAvatar, setNewFavoriteAvatar] = useState('');
   const phoneInputRef = useRef<HTMLInputElement | null>(null);
@@ -271,27 +278,28 @@ const PaymentsPage = () => {
             }))
           );
 
-          const { data: selectedBankAccount, error: selectedBankAccountError } = await supabase
+          const { data: selectedBankAccounts, error: selectedBankAccountsError } = await supabase
             .from('accounts')
             .select('*')
             .eq('user_id', exactProfile.id)
             .eq('bank_name', selectedBank)
-            .maybeSingle();
+            .limit(1);
 
-          if (selectedBankAccountError) {
-            const { data: fallbackSelectedBankAccount, error: fallbackSelectedBankAccountError } =
-              await supabase
-                .from('accounts')
-                .select('*')
-                .eq('user_id', exactProfile.id)
-                .eq('bank', selectedBank)
-                .maybeSingle();
-            if (!fallbackSelectedBankAccountError && !fallbackSelectedBankAccount) {
-              setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
-            } else {
-              setRecipientLookupError(null);
-            }
-          } else if (!selectedBankAccount) {
+          if (selectedBankAccountsError) throw selectedBankAccountsError;
+
+          if (!selectedBankAccounts || selectedBankAccounts.length === 0) {
+            // eslint-disable-next-line no-console
+            console.log('Recipient accounts by user_id:', {
+              userId: exactProfile.id,
+              selectedBank,
+              availableBanks: (matchedAccounts ?? []).map((row) =>
+                String(
+                  (row as { bank_name?: string; bank?: string }).bank_name ??
+                    (row as { bank?: string }).bank ??
+                    ''
+                )
+              )
+            });
             setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
           } else {
             setRecipientLookupError(null);
@@ -343,27 +351,28 @@ const PaymentsPage = () => {
           }))
         );
 
-        const { data: selectedBankAccount, error: selectedBankAccountError } = await supabase
+        const { data: selectedBankAccounts, error: selectedBankAccountsError } = await supabase
           .from('accounts')
           .select('*')
           .eq('user_id', matched.id)
           .eq('bank_name', selectedBank)
-          .maybeSingle();
+          .limit(1);
 
-        if (selectedBankAccountError) {
-          const { data: fallbackSelectedBankAccount, error: fallbackSelectedBankAccountError } =
-            await supabase
-              .from('accounts')
-              .select('*')
-              .eq('user_id', matched.id)
-              .eq('bank', selectedBank)
-              .maybeSingle();
-          if (!fallbackSelectedBankAccountError && !fallbackSelectedBankAccount) {
-            setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
-          } else {
-            setRecipientLookupError(null);
-          }
-        } else if (!selectedBankAccount) {
+        if (selectedBankAccountsError) throw selectedBankAccountsError;
+
+        if (!selectedBankAccounts || selectedBankAccounts.length === 0) {
+          // eslint-disable-next-line no-console
+          console.log('Recipient accounts by user_id:', {
+            userId: matched.id,
+            selectedBank,
+            availableBanks: (matchedAccounts ?? []).map((row) =>
+              String(
+                (row as { bank_name?: string; bank?: string }).bank_name ??
+                  (row as { bank?: string }).bank ??
+                  ''
+              )
+            )
+          });
           setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
         } else {
           setRecipientLookupError(null);
@@ -497,6 +506,7 @@ const PaymentsPage = () => {
   const destinationAccount = accounts.find((account) => account.id === toAccountId) ?? null;
 
   const sourceBankId = normalizeBankId(sourceAccount?.bank);
+  const selectedRecipientBankName = mapRecipientBankToDbName(recipientBankId);
   const recipientAccountForPhone =
     recipientAccounts.find((account) => normalizeBankId(account.bank) === recipientBankId) ?? null;
   const recipientPhoneBankId = normalizeBankId(recipientAccountForPhone?.bank);
@@ -902,14 +912,13 @@ const PaymentsPage = () => {
             : cardNumber.replace(/\D/g, '').slice(0, 16);
 
         if (draftValue) {
-          const recipientMeta = KZ_BANKS.find((bank) => bank.id === recipientBankId);
           setLastTransferDraft({
             name:
               method === 'phone'
                 ? recipientName ?? `Контакт ${phoneDigits.slice(-4)}`
                 : `Карта ${draftValue.slice(-4)}`,
             phone_number: draftValue,
-            bank_name: recipientMeta?.name ?? destinationBankMeta.name,
+            bank_name: selectedRecipientBankName,
             avatar_url: null,
             category: method
           });
@@ -935,8 +944,8 @@ const PaymentsPage = () => {
     method === 'own'
       ? getBankMeta(destinationAccount?.bank)
       : method === 'phone'
-        ? getBankMeta(recipientAccountForPhone?.bank ?? KZ_BANKS.find((bank) => bank.id === recipientBankId)?.name)
-        : getBankMeta(KZ_BANKS.find((bank) => bank.id === recipientBankId)?.name);
+        ? getBankMeta(recipientAccountForPhone?.bank ?? selectedRecipientBankName)
+        : getBankMeta(selectedRecipientBankName);
   const sourceBankMeta = getBankMeta(sourceAccount?.bank);
 
   return (
@@ -1154,7 +1163,9 @@ const PaymentsPage = () => {
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-slate-300">Банк получателя</label>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {KZ_BANKS.map((bank) => (
+                      {STANDARD_TRANSFER_BANK_OPTIONS.map((bank) => {
+                        const bankMeta = getBankMeta(bank.name);
+                        return (
                         <button
                           key={bank.id}
                           type="button"
@@ -1165,12 +1176,13 @@ const PaymentsPage = () => {
                               : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
                           }`}
                         >
-                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.badgeTone}`}>
-                            {bank.logo}
+                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
+                            {bankMeta.logo}
                           </span>
-                          <span>{bank.shortName}</span>
+                          <span>{bank.name}</span>
                         </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </>
@@ -1194,7 +1206,9 @@ const PaymentsPage = () => {
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-slate-300">Банк получателя</label>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {KZ_BANKS.map((bank) => (
+                      {STANDARD_TRANSFER_BANK_OPTIONS.map((bank) => {
+                        const bankMeta = getBankMeta(bank.name);
+                        return (
                         <button
                           key={bank.id}
                           type="button"
@@ -1205,12 +1219,13 @@ const PaymentsPage = () => {
                               : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
                           }`}
                         >
-                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bank.badgeTone}`}>
-                            {bank.logo}
+                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
+                            {bankMeta.logo}
                           </span>
-                          <span>{bank.shortName}</span>
+                          <span>{bank.name}</span>
                         </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </>
@@ -1440,12 +1455,12 @@ const PaymentsPage = () => {
                   <label className="text-xs text-slate-400">Банк</label>
                   <select
                     value={newFavoriteBankName}
-                    onChange={(e) => setNewFavoriteBankName(e.target.value)}
+                    onChange={(e) => setNewFavoriteBankName(e.target.value as StandardBankName)}
                     className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                   >
-                    {KZ_BANKS.map((bank) => (
-                      <option key={bank.id} value={bank.name}>
-                        {bank.name}
+                    {STANDARD_BANK_NAMES.map((bankName) => (
+                      <option key={bankName} value={bankName}>
+                        {bankName}
                       </option>
                     ))}
                   </select>

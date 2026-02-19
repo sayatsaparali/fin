@@ -35,9 +35,9 @@ const weekdayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] a
 const buildFallbackData = (): DashboardData => ({
   totalBalance: 3250000,
   accounts: [
-    { id: 'demo-kaspi', bank: 'Kaspi.kz', balance: 1425000 },
+    { id: 'demo-kaspi', bank: 'Kaspi', balance: 1425000 },
     { id: 'demo-halyk', bank: 'Halyk Bank', balance: 845000 },
-    { id: 'demo-freedom', bank: 'Freedom Bank', balance: 980000 }
+    { id: 'demo-bcc', bank: 'BCC', balance: 980000 }
   ],
   analytics: [
     { name: 'Пн', income: 180000, expense: 120000 },

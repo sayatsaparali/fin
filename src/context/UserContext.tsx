@@ -1,4 +1,5 @@
 import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
+import { ensureStandardAccountsForUser } from '../lib/accountsInitializer';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type User = {
@@ -53,6 +54,17 @@ export const UserProvider = ({ children }: UserProviderProps) => {
         isKycVerified: false,
         emailVerified: Boolean(sessionUser.email_confirmed_at)
       });
+
+      ensureStandardAccountsForUser(sessionUser.id)
+        .then((result) => {
+          if (result.created > 0) {
+            window.dispatchEvent(new Event('finhub:accounts-updated'));
+          }
+        })
+        .catch((accountsInitError) => {
+          // eslint-disable-next-line no-console
+          console.error('Failed to auto-initialize standard accounts:', accountsInitError);
+        });
     });
   }, []);
 
@@ -78,4 +90,3 @@ export const useUser = () => {
   }
   return ctx;
 };
-

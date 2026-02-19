@@ -3,6 +3,7 @@ import { FormEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
+import { ensureStandardAccountsForUser } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
@@ -58,11 +59,6 @@ const formatSupabaseError = (
   `${title}: ${error.message}${error.details ? ` | details: ${error.details}` : ''}${
     error.hint ? ` | hint: ${error.hint}` : ''
   }${error.code ? ` | code: ${error.code}` : ''}`;
-
-const generateKzAccountNumber = () => {
-  const digits = Array.from({ length: 18 }, () => Math.floor(Math.random() * 10)).join('');
-  return `KZ${digits}`;
-};
 
 const RegisterPage = () => {
   const { login } = useUser();
@@ -206,70 +202,12 @@ const RegisterPage = () => {
         return;
       }
 
-      const eternalAccounts = [
-        { bank_name: 'Kaspi', bank: 'Kaspi', balance: 50000, account_number: generateKzAccountNumber() },
-        { bank_name: 'Halyk', bank: 'Halyk', balance: 75000, account_number: generateKzAccountNumber() },
-        { bank_name: 'BCC', bank: 'BCC', balance: 0, account_number: generateKzAccountNumber() }
-      ] as const;
-
-      const ensureAccount = async (account: (typeof eternalAccounts)[number]) => {
-        const { data: existingByBankName, error: existingByBankNameError } = await supabase
-          .from('accounts')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('bank_name', account.bank_name)
-          .maybeSingle();
-
-        if (!existingByBankNameError && existingByBankName) return;
-
-        const { data: existingByBank, error: existingByBankError } = await supabase
-          .from('accounts')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('bank', account.bank)
-          .maybeSingle();
-
-        if (!existingByBankError && existingByBank) return;
-
-        const { error: insertStrictError } = await supabase.from('accounts').insert({
-          user_id: userId,
-          bank_name: account.bank_name,
-          bank: account.bank,
-          balance: account.balance,
-          account_number: account.account_number
-        });
-
-        if (!insertStrictError) return;
-
-        const { error: insertNoBankNameError } = await supabase.from('accounts').insert({
-          user_id: userId,
-          bank: account.bank,
-          balance: account.balance,
-          account_number: account.account_number
-        });
-
-        if (!insertNoBankNameError) return;
-
-        const { error: insertMinimalError } = await supabase.from('accounts').insert({
-          user_id: userId,
-          bank: account.bank,
-          balance: account.balance
-        });
-
-        if (insertMinimalError) {
-          throw insertMinimalError;
-        }
-      };
-
       try {
-        for (const account of eternalAccounts) {
-          // eslint-disable-next-line no-await-in-loop
-          await ensureAccount(account);
-        }
+        await ensureStandardAccountsForUser(userId);
       } catch (starterAccountsError) {
         // eslint-disable-next-line no-console
         console.error('Supabase eternal accounts error:', starterAccountsError);
-        setError('Ошибка создания обязательных счетов (Kaspi/Halyk/BCC).');
+        setError('Ошибка инициализации банковских счетов');
         return;
       }
 

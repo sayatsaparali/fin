@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Phone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
+import { extractKzPhoneDigits, formatKzPhoneFromDigits } from '../lib/phone';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type ProfileData = {
@@ -29,23 +30,9 @@ const formatBirthDate = (date: string | null) => {
 
 const formatPhoneNumber = (value: string | null) => {
   if (!value) return 'Не указан';
-
-  let digits = value.replace(/\D/g, '');
-  if (digits.startsWith('8')) {
-    digits = `7${digits.slice(1)}`;
-  }
-  if (digits.length === 10) {
-    digits = `7${digits}`;
-  }
-  if (digits.length < 11) return value;
-
-  const national = digits.slice(-10);
-  const p1 = national.slice(0, 3);
-  const p2 = national.slice(3, 6);
-  const p3 = national.slice(6, 8);
-  const p4 = national.slice(8, 10);
-
-  return `+7 (${p1}) ${p2}-${p3}-${p4}`;
+  const digits = extractKzPhoneDigits(value);
+  if (digits.length !== 10) return value;
+  return formatKzPhoneFromDigits(digits);
 };
 
 const ProfilePage = () => {

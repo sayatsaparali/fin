@@ -23,6 +23,7 @@ import {
   type FavoriteContact,
   type NewFavoriteContactInput
 } from '../lib/favoritesApi';
+import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type TransferMethod = 'own' | 'phone' | 'card';
@@ -46,52 +47,12 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 0
   }).format(value);
 
-const formatPhoneValue = (input: string) => {
-  let digits = input.replace(/\D/g, '');
-
-  if (digits.startsWith('8')) {
-    digits = `7${digits.slice(1)}`;
-  }
-
-  if (digits.startsWith('7') && digits.length === 11) {
-    digits = digits.slice(1);
-  }
-
-  if (digits.length > 0 && !digits.startsWith('7')) {
-    digits = `7${digits}`;
-  }
-
-  digits = digits.slice(0, 10);
-
-  const p1 = digits.slice(0, 3);
-  const p2 = digits.slice(3, 6);
-  const p3 = digits.slice(6, 8);
-  const p4 = digits.slice(8, 10);
-
-  let result = '+7';
-  if (p1) result += ` (${p1}`;
-  if (p1.length === 3) result += ')';
-  if (p2) result += ` ${p2}`;
-  if (p3) result += `-${p3}`;
-  if (p4) result += `-${p4}`;
-
-  return result;
-};
-
-const getPhoneDigits = (value: string) => value.replace(/\D/g, '').slice(-10);
-
 const formatCardValue = (input: string) =>
   input
     .replace(/\D/g, '')
     .slice(0, 16)
     .replace(/(.{4})/g, '$1 ')
     .trim();
-
-const normalizePhoneDigits = (value: string | null | undefined) =>
-  String(value ?? '')
-    .replace(/\D/g, '')
-    .replace(/^8/, '7')
-    .slice(-10);
 
 type ProfileLookupRow = {
   id: string;
@@ -129,7 +90,7 @@ const PaymentsPage = () => {
   const [toAccountId, setToAccountId] = useState<string>('');
   const [recipientBankId, setRecipientBankId] = useState<BankId>('halyk');
 
-  const [phone, setPhone] = useState('+7');
+  const [phoneDigits, setPhoneDigits] = useState('');
   const [cardNumber, setCardNumber] = useState('');
   const [amount, setAmount] = useState('');
   const [comment, setComment] = useState('');
@@ -198,7 +159,9 @@ const PaymentsPage = () => {
           .select('phone_number')
           .eq('id', user.id)
           .maybeSingle();
-        setOwnPhoneDigits(normalizePhoneDigits((ownProfile as { phone_number?: string } | null)?.phone_number));
+        setOwnPhoneDigits(
+          extractKzPhoneDigits((ownProfile as { phone_number?: string } | null)?.phone_number)
+        );
       } catch (loadError) {
         // eslint-disable-next-line no-console
         console.error('Failed to load accounts for transfers:', loadError);
@@ -226,7 +189,7 @@ const PaymentsPage = () => {
     const lookupRecipientByPhone = async () => {
       if (method !== 'phone') return;
 
-      const digits = getPhoneDigits(phone);
+      const digits = phoneDigits;
       if (digits.length !== 10) {
         if (!isMounted) return;
         setRecipientName(null);
@@ -251,7 +214,7 @@ const PaymentsPage = () => {
         if (!isMounted) return;
 
         const matched = (data as ProfileLookupRow[] | null)?.find(
-          (profile) => normalizePhoneDigits(profile.phone_number) === digits
+          (profile) => extractKzPhoneDigits(profile.phone_number) === digits
         );
 
         if (!matched) {
@@ -296,7 +259,7 @@ const PaymentsPage = () => {
     return () => {
       isMounted = false;
     };
-  }, [method, phone]);
+  }, [method, phoneDigits]);
 
   useEffect(() => {
     if (method !== 'phone') {
@@ -431,7 +394,7 @@ const PaymentsPage = () => {
       setMethod('own');
     } else {
       setMethod('phone');
-      setPhone(formatPhoneValue(favorite.phone_number));
+      setPhoneDigits(extractKzPhoneDigits(favorite.phone_number));
       setRecipientName(favorite.name);
     }
 
@@ -441,10 +404,11 @@ const PaymentsPage = () => {
   };
 
   const handleCreateFavorite = async () => {
+    const phoneDigitsForFavorite = extractKzPhoneDigits(newFavoriteValue);
     const normalizedValue =
       newFavoriteCategory === 'card'
         ? newFavoriteValue.replace(/\D/g, '').slice(0, 16)
-        : `+7${newFavoriteValue.replace(/\D/g, '').slice(-10)}`;
+        : toKzE164Phone(phoneDigitsForFavorite);
 
     if (!newFavoriteName.trim()) {
       setError('Введите имя контакта.');
@@ -456,7 +420,7 @@ const PaymentsPage = () => {
       return;
     }
 
-    if (newFavoriteCategory === 'phone' && normalizedValue.length < 12) {
+    if (newFavoriteCategory === 'phone' && phoneDigitsForFavorite.length !== 10) {
       setError('Введите корректный номер телефона.');
       return;
     }
@@ -638,13 +602,13 @@ const PaymentsPage = () => {
       }
     }
 
-    if (method === 'phone' && getPhoneDigits(phone).length !== 10) {
+    if (method === 'phone' && phoneDigits.length !== 10) {
       setError('Введите номер в формате +7 (7xx) xxx-xx-xx.');
       return;
     }
 
     if (method === 'phone') {
-      const enteredPhoneDigits = getPhoneDigits(phone);
+      const enteredPhoneDigits = phoneDigits;
       if (
         (ownPhoneDigits && enteredPhoneDigits === ownPhoneDigits) ||
         (recipientUserId && authUserId && recipientUserId === authUserId)
@@ -764,11 +728,11 @@ const PaymentsPage = () => {
 
         const transferCounterparty =
           method === 'phone'
-            ? recipientName ?? `Телефон ${phone.slice(-4)}`
+            ? recipientName ?? `Телефон ${phoneDigits.slice(-4)}`
             : `Карта ${cardNumber.replace(/\D/g, '').slice(-4)}`;
         const transferDescription =
           method === 'phone'
-            ? `Перевод ${recipientName ?? `на номер ${phone}`}`
+            ? `Перевод ${recipientName ?? `на номер ${formatKzPhoneFromDigits(phoneDigits)}`}`
             : `Перевод на карту ${cardNumber.replace(/\D/g, '').slice(-4)}`;
 
         await createTransactionRecord({
@@ -797,7 +761,7 @@ const PaymentsPage = () => {
       if (method === 'phone' || method === 'card') {
         const draftValue =
           method === 'phone'
-            ? `+7${getPhoneDigits(phone)}`
+            ? toKzE164Phone(phoneDigits)
             : cardNumber.replace(/\D/g, '').slice(0, 16);
 
         if (draftValue) {
@@ -805,7 +769,7 @@ const PaymentsPage = () => {
           setLastTransferDraft({
             name:
               method === 'phone'
-                ? recipientName ?? `Контакт ${phone.slice(-4)}`
+                ? recipientName ?? `Контакт ${phoneDigits.slice(-4)}`
                 : `Карта ${draftValue.slice(-4)}`,
             phone_number: draftValue,
             bank_name: recipientMeta?.name ?? destinationBankMeta.name,
@@ -819,7 +783,7 @@ const PaymentsPage = () => {
 
       setAmount('');
       setComment('');
-      setPhone('+7');
+      setPhoneDigits('');
       setCardNumber('');
     } catch (submitError) {
       // eslint-disable-next-line no-console
@@ -1019,18 +983,18 @@ const PaymentsPage = () => {
                       id="phone"
                       type="tel"
                       inputMode="numeric"
-                      value={phone}
-                      onChange={(e) => setPhone(formatPhoneValue(e.target.value))}
+                      value={formatKzPhoneFromDigits(phoneDigits)}
+                      onChange={(e) => setPhoneDigits(extractKzPhoneDigits(e.target.value))}
                       placeholder="+7 (7xx) xxx-xx-xx"
                       className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                     />
-                    {isRecipientLookupLoading && getPhoneDigits(phone).length === 10 && (
+                    {isRecipientLookupLoading && phoneDigits.length === 10 && (
                       <p className="text-xs text-slate-400">Поиск получателя...</p>
                     )}
                     {!isRecipientLookupLoading && recipientName && (
                       <p className="text-xs text-emerald-300">Получатель: {recipientName}</p>
                     )}
-                    {!isRecipientLookupLoading && getPhoneDigits(phone).length === 10 && !recipientName && (
+                    {!isRecipientLookupLoading && phoneDigits.length === 10 && !recipientName && (
                       <p className="text-xs text-rose-300">
                         {recipientLookupError ?? 'Пользователь с таким номером не зарегистрирован в FinHub'}
                       </p>
@@ -1315,7 +1279,7 @@ const PaymentsPage = () => {
                       setNewFavoriteValue(
                         newFavoriteCategory === 'card'
                           ? formatCardValue(e.target.value)
-                          : formatPhoneValue(e.target.value)
+                          : formatKzPhoneFromDigits(extractKzPhoneDigits(e.target.value))
                       )
                     }
                     placeholder={

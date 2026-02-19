@@ -3,6 +3,7 @@ import { FormEvent, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
+import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 const emailRegex = /\S+@\S+\.\S+/;
@@ -48,40 +49,6 @@ const normalizeBirthDate = (day: string, month: string, year: string): string | 
   return `${y.toString().padStart(4, '0')}-${m.toString().padStart(2, '0')}-${d
     .toString()
     .padStart(2, '0')}`;
-};
-
-const normalizePhoneDigits = (input: string) => {
-  let digits = input.replace(/\D/g, '');
-  const hasPlusSevenPrefix = input.trim().startsWith('+7');
-
-  if (digits.startsWith('8')) {
-    digits = `7${digits.slice(1)}`;
-  }
-
-  // Remove country code only when it is clearly present.
-  if ((hasPlusSevenPrefix && digits.startsWith('7')) || digits.length === 11) {
-    digits = digits.slice(1);
-  }
-
-  return digits.slice(0, 10);
-};
-
-const formatPhoneValue = (digitsInput: string) => {
-  const digits = digitsInput.slice(0, 10);
-
-  const p1 = digits.slice(0, 3);
-  const p2 = digits.slice(3, 6);
-  const p3 = digits.slice(6, 8);
-  const p4 = digits.slice(8, 10);
-
-  let result = '+7';
-  if (p1) result += ` (${p1}`;
-  if (p1.length === 3) result += ')';
-  if (p2) result += ` ${p2}`;
-  if (p3) result += `-${p3}`;
-  if (p4) result += `-${p4}`;
-
-  return result;
 };
 
 const formatSupabaseError = (
@@ -154,7 +121,7 @@ const RegisterPage = () => {
       }
 
       // Регистрация через Supabase Auth с метаданными для FinHub
-      const normalizedPhone = `+7${phoneDigits}`;
+      const normalizedPhone = toKzE164Phone(phoneDigits);
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
@@ -480,8 +447,8 @@ const RegisterPage = () => {
                   inputMode="numeric"
                   autoComplete="tel"
                   className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
-                  value={formatPhoneValue(phoneDigits)}
-                  onChange={(e) => setPhoneDigits(normalizePhoneDigits(e.target.value))}
+                  value={formatKzPhoneFromDigits(phoneDigits)}
+                  onChange={(e) => setPhoneDigits(extractKzPhoneDigits(e.target.value))}
                   placeholder="+7 (7xx) xxx-xx-xx"
                 />
               </div>

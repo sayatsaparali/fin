@@ -69,7 +69,7 @@ begin
       (
         p_sender_user_id,
         -(p_amount + p_commission),
-        coalesce('Перевод ' || nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
+        'Перевод по номеру телефона',
         'Переводы',
         coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
         p_commission,
@@ -96,7 +96,7 @@ begin
           (
             p_sender_user_id,
             -(p_amount + p_commission),
-            coalesce('Перевод ' || nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
+            'Перевод по номеру телефона',
             'Переводы',
             coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
             p_commission,
@@ -122,7 +122,7 @@ begin
             p_sender_user_id,
             -(p_amount + p_commission),
             'expense',
-            coalesce('Перевод ' || nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
+            'Перевод по номеру телефона',
             coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
             p_commission,
             now(),
@@ -146,7 +146,7 @@ begin
                   p_sender_user_id,
                   -(p_amount + p_commission),
                   'expense',
-                  coalesce('Перевод ' || nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
+                  'Перевод по номеру телефона',
                   coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
                   now(),
                   v_sender_bank

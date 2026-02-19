@@ -68,18 +68,30 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   }
 
   // 1. Счета пользователя по банкам
-  const { data: accounts, error: accountsError } = await supabase
+  const { data: accountsByBankName, error: accountsByBankNameError } = await supabase
     .from('accounts')
-    .select('id, bank, balance')
+    .select('id, bank, bank_name, balance')
     .eq('user_id', user.id);
 
-  if (accountsError) {
-    throw accountsError;
+  let accounts = accountsByBankName;
+  if (accountsByBankNameError) {
+    const { data: accountsByBank, error: accountsByBankError } = await supabase
+      .from('accounts')
+      .select('id, bank, balance')
+      .eq('user_id', user.id);
+    if (accountsByBankError) {
+      throw accountsByBankError;
+    }
+    accounts = accountsByBank;
   }
 
   const normalizedAccounts: DashboardAccount[] = (accounts ?? []).map((acc) => ({
     id: String(acc.id ?? crypto.randomUUID()),
-    bank: String(acc.bank ?? 'Bank account'),
+    bank: String(
+      (acc as { bank_name?: string; bank?: string }).bank_name ??
+        (acc as { bank?: string }).bank ??
+        'Bank account'
+    ),
     balance: Number(acc.balance ?? 0)
   }));
 

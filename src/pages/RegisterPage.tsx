@@ -59,17 +59,9 @@ const formatSupabaseError = (
     error.hint ? ` | hint: ${error.hint}` : ''
   }${error.code ? ` | code: ${error.code}` : ''}`;
 
-const generateRandomBalance = () => {
-  const min = 50000;
-  const max = 200000;
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-};
-
-const generateCardNumber = () => {
-  const prefixes = ['4400', '4578', '5169', '5278'];
-  const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-  const remaining = Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('');
-  return `${prefix}${remaining}`;
+const generateKzAccountNumber = () => {
+  const digits = Array.from({ length: 18 }, () => Math.floor(Math.random() * 10)).join('');
+  return `KZ${digits}`;
 };
 
 const RegisterPage = () => {
@@ -214,81 +206,71 @@ const RegisterPage = () => {
         return;
       }
 
-      const starterBanks = ['Kaspi.kz', 'Halyk Bank', 'BCC (ЦентрКредит)'] as const;
-      const { data: existingStarterAccounts, error: existingAccountsError } = await supabase
-        .from('accounts')
-        .select('bank')
-        .eq('user_id', userId)
-        .in('bank', [...starterBanks]);
+      const eternalAccounts = [
+        { bank_name: 'Kaspi', bank: 'Kaspi', balance: 50000, account_number: generateKzAccountNumber() },
+        { bank_name: 'Halyk', bank: 'Halyk', balance: 75000, account_number: generateKzAccountNumber() },
+        { bank_name: 'BCC', bank: 'BCC', balance: 0, account_number: generateKzAccountNumber() }
+      ] as const;
 
-      if (existingAccountsError) {
-        // eslint-disable-next-line no-console
-        console.error('Supabase accounts pre-check error:', existingAccountsError);
-        setError(
-          formatSupabaseError('Ошибка проверки стартовых счетов', {
-            message: existingAccountsError.message,
-            details: existingAccountsError.details ?? undefined,
-            hint: existingAccountsError.hint ?? undefined,
-            code: existingAccountsError.code ?? undefined
-          })
-        );
-        return;
-      }
+      const ensureAccount = async (account: (typeof eternalAccounts)[number]) => {
+        const { data: existingByBankName, error: existingByBankNameError } = await supabase
+          .from('accounts')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('bank_name', account.bank_name)
+          .maybeSingle();
 
-      const existingBanks = new Set(
-        (existingStarterAccounts ?? []).map((row) => String((row as { bank?: string }).bank ?? ''))
-      );
-      const starterRows = starterBanks
-        .filter((bank) => !existingBanks.has(bank))
-        .map((bank) => ({
+        if (!existingByBankNameError && existingByBankName) return;
+
+        const { data: existingByBank, error: existingByBankError } = await supabase
+          .from('accounts')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('bank', account.bank)
+          .maybeSingle();
+
+        if (!existingByBankError && existingByBank) return;
+
+        const { error: insertStrictError } = await supabase.from('accounts').insert({
           user_id: userId,
-          bank,
-          balance: generateRandomBalance(),
-          card_number: generateCardNumber()
-        }));
+          bank_name: account.bank_name,
+          bank: account.bank,
+          balance: account.balance,
+          account_number: account.account_number
+        });
 
-      if (starterRows.length > 0) {
-        const { error: starterAccountsError } = await supabase.from('accounts').insert(starterRows);
-        if (starterAccountsError) {
-          const starterRowsAccountNumber = starterRows.map((row) => ({
-            user_id: row.user_id,
-            bank: row.bank,
-            balance: row.balance,
-            account_number: row.card_number
-          }));
-          const { error: starterAccountsAccountNumberError } = await supabase
-            .from('accounts')
-            .insert(starterRowsAccountNumber);
+        if (!insertStrictError) return;
 
-          if (starterAccountsAccountNumberError) {
-            const starterRowsFallback = starterRows.map((row) => ({
-              user_id: row.user_id,
-              bank: row.bank,
-              balance: row.balance
-            }));
-            const { error: starterAccountsFallbackError } = await supabase
-              .from('accounts')
-              .insert(starterRowsFallback);
+        const { error: insertNoBankNameError } = await supabase.from('accounts').insert({
+          user_id: userId,
+          bank: account.bank,
+          balance: account.balance,
+          account_number: account.account_number
+        });
 
-            if (starterAccountsFallbackError) {
-              // eslint-disable-next-line no-console
-              console.error('Supabase starter accounts insert error:', {
-                starterAccountsError,
-                starterAccountsAccountNumberError,
-                starterAccountsFallbackError
-              });
-              setError(
-                formatSupabaseError('Ошибка создания стартовых счетов', {
-                  message: starterAccountsFallbackError.message,
-                  details: starterAccountsFallbackError.details ?? undefined,
-                  hint: starterAccountsFallbackError.hint ?? undefined,
-                  code: starterAccountsFallbackError.code ?? undefined
-                })
-              );
-              return;
-            }
-          }
+        if (!insertNoBankNameError) return;
+
+        const { error: insertMinimalError } = await supabase.from('accounts').insert({
+          user_id: userId,
+          bank: account.bank,
+          balance: account.balance
+        });
+
+        if (insertMinimalError) {
+          throw insertMinimalError;
         }
+      };
+
+      try {
+        for (const account of eternalAccounts) {
+          // eslint-disable-next-line no-await-in-loop
+          await ensureAccount(account);
+        }
+      } catch (starterAccountsError) {
+        // eslint-disable-next-line no-console
+        console.error('Supabase eternal accounts error:', starterAccountsError);
+        setError('Ошибка создания обязательных счетов (Kaspi/Halyk/BCC).');
+        return;
       }
 
       // Автоматический вход после успешного signUp + insert профиля

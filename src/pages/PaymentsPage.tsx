@@ -66,6 +66,13 @@ type RecipientAccount = {
   bank: string;
 };
 
+const mapRecipientBankToDbName = (bankId: BankId): string => {
+  if (bankId === 'kaspi') return 'Kaspi';
+  if (bankId === 'halyk') return 'Halyk';
+  if (bankId === 'bcc') return 'BCC';
+  return KZ_BANKS.find((bank) => bank.id === bankId)?.name ?? 'Halyk';
+};
+
 const PaymentsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -145,21 +152,31 @@ const PaymentsPage = () => {
         }
         setAuthUserId(user.id);
 
-        const { data: rows, error: accountsError } = await supabase
+        const { data: rowsByBankName, error: accountsByBankNameError } = await supabase
           .from('accounts')
-          .select('id, bank, balance')
+          .select('id, bank, bank_name, balance')
           .eq('user_id', user.id)
-          .order('bank', { ascending: true });
+          .order('bank_name', { ascending: true });
 
-        if (accountsError) {
-          throw accountsError;
+        let rows = rowsByBankName;
+        if (accountsByBankNameError) {
+          const { data: rowsByBank, error: accountsByBankError } = await supabase
+            .from('accounts')
+            .select('id, bank, balance')
+            .eq('user_id', user.id)
+            .order('bank', { ascending: true });
+
+          if (accountsByBankError) {
+            throw accountsByBankError;
+          }
+          rows = rowsByBank;
         }
 
         if (!isMounted) return;
 
         const normalized: ConnectedAccount[] = (rows ?? []).map((row) => ({
           id: String(row.id),
-          bank: String(row.bank ?? 'Bank'),
+          bank: String((row as { bank_name?: string; bank?: string }).bank_name ?? row.bank ?? 'Bank'),
           balance: Number(row.balance ?? 0)
         }));
 
@@ -201,6 +218,7 @@ const PaymentsPage = () => {
 
     const lookupRecipientByPhone = async () => {
       if (method !== 'phone') return;
+      const selectedBank = mapRecipientBankToDbName(recipientBankId);
 
       const digits = phoneDigits;
       if (digits.length !== 10) {
@@ -236,7 +254,7 @@ const PaymentsPage = () => {
 
           const { data: matchedAccounts, error: matchedAccountsError } = await supabase
             .from('accounts')
-            .select('id, bank')
+            .select('id, bank, bank_name')
             .eq('user_id', exactProfile.id);
 
           if (matchedAccountsError) throw matchedAccountsError;
@@ -245,9 +263,39 @@ const PaymentsPage = () => {
           setRecipientAccounts(
             (matchedAccounts ?? []).map((row) => ({
               id: String((row as { id?: string }).id ?? ''),
-              bank: String((row as { bank?: string }).bank ?? '')
+              bank: String(
+                (row as { bank_name?: string; bank?: string }).bank_name ??
+                  (row as { bank?: string }).bank ??
+                  ''
+              )
             }))
           );
+
+          const { data: selectedBankAccount, error: selectedBankAccountError } = await supabase
+            .from('accounts')
+            .select('*')
+            .eq('user_id', exactProfile.id)
+            .eq('bank_name', selectedBank)
+            .maybeSingle();
+
+          if (selectedBankAccountError) {
+            const { data: fallbackSelectedBankAccount, error: fallbackSelectedBankAccountError } =
+              await supabase
+                .from('accounts')
+                .select('*')
+                .eq('user_id', exactProfile.id)
+                .eq('bank', selectedBank)
+                .maybeSingle();
+            if (!fallbackSelectedBankAccountError && !fallbackSelectedBankAccount) {
+              setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
+            } else {
+              setRecipientLookupError(null);
+            }
+          } else if (!selectedBankAccount) {
+            setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
+          } else {
+            setRecipientLookupError(null);
+          }
           return;
         }
 
@@ -278,7 +326,7 @@ const PaymentsPage = () => {
 
         const { data: matchedAccounts, error: matchedAccountsError } = await supabase
           .from('accounts')
-          .select('id, bank')
+          .select('id, bank, bank_name')
           .eq('user_id', matched.id);
 
         if (matchedAccountsError) throw matchedAccountsError;
@@ -287,9 +335,39 @@ const PaymentsPage = () => {
         setRecipientAccounts(
           (matchedAccounts ?? []).map((row) => ({
             id: String((row as { id?: string }).id ?? ''),
-            bank: String((row as { bank?: string }).bank ?? '')
+            bank: String(
+              (row as { bank_name?: string; bank?: string }).bank_name ??
+                (row as { bank?: string }).bank ??
+                ''
+            )
           }))
         );
+
+        const { data: selectedBankAccount, error: selectedBankAccountError } = await supabase
+          .from('accounts')
+          .select('*')
+          .eq('user_id', matched.id)
+          .eq('bank_name', selectedBank)
+          .maybeSingle();
+
+        if (selectedBankAccountError) {
+          const { data: fallbackSelectedBankAccount, error: fallbackSelectedBankAccountError } =
+            await supabase
+              .from('accounts')
+              .select('*')
+              .eq('user_id', matched.id)
+              .eq('bank', selectedBank)
+              .maybeSingle();
+          if (!fallbackSelectedBankAccountError && !fallbackSelectedBankAccount) {
+            setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
+          } else {
+            setRecipientLookupError(null);
+          }
+        } else if (!selectedBankAccount) {
+          setRecipientLookupError(`У получателя нет счета ${selectedBank}`);
+        } else {
+          setRecipientLookupError(null);
+        }
       } catch (lookupError) {
         // eslint-disable-next-line no-console
         console.error('Recipient lookup failed:', lookupError);
@@ -305,7 +383,7 @@ const PaymentsPage = () => {
     return () => {
       isMounted = false;
     };
-  }, [method, phoneDigits]);
+  }, [method, phoneDigits, recipientBankId]);
 
   useEffect(() => {
     if (method !== 'phone') {

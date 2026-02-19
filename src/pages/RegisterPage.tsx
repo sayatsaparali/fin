@@ -179,7 +179,7 @@ const RegisterPage = () => {
         birth_date: birthDate
       };
 
-      const { error: profileUpsertError } = await supabase
+      const { data: profile, error: profileUpsertError } = await supabase
         .from('profiles')
         .upsert(
           {
@@ -187,7 +187,9 @@ const RegisterPage = () => {
             ...baseProfilePayload
           },
           { onConflict: 'id' }
-        );
+        )
+        .select('id')
+        .single<{ id: string }>();
 
       if (profileUpsertError) {
         // eslint-disable-next-line no-console
@@ -203,13 +205,19 @@ const RegisterPage = () => {
         return;
       }
 
+      const currentUserId = profile?.id;
+      if (!currentUserId) {
+        setError('Профиль создан без id. Инициализация счетов остановлена.');
+        return;
+      }
+
       try {
-        await ensureStandardAccountsForUser(userId);
+        await ensureStandardAccountsForUser(currentUserId);
 
         const { data: initializedByBankName, error: initializedByBankNameError } = await supabase
           .from('accounts')
           .select('bank_name')
-          .eq('user_id', userId)
+          .eq('user_id', currentUserId)
           .in('bank_name', [...STANDARD_BANK_NAMES]);
 
         if (!initializedByBankNameError) {
@@ -225,7 +233,7 @@ const RegisterPage = () => {
           const { data: initializedByBank, error: initializedByBankError } = await supabase
             .from('accounts')
             .select('bank')
-            .eq('user_id', userId)
+            .eq('user_id', currentUserId)
             .in('bank', [...STANDARD_BANK_NAMES]);
 
           if (initializedByBankError) {

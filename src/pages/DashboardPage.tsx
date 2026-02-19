@@ -240,10 +240,22 @@ const DashboardPage = () => {
         throw userError ?? new Error('Пользователь не найден.');
       }
 
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', authUser.id)
+        .single<{ id: string }>();
+
+      if (profileError || !profile?.id) {
+        throw profileError ?? new Error('Профиль не найден.');
+      }
+
+      const currentUserId = profile.id;
+
       const { data: existingAccount, error: existingError } = await supabase
         .from('accounts')
         .select('id')
-        .eq('user_id', authUser.id)
+        .eq('user_id', currentUserId)
         .eq('bank_name', selectedNewBank)
         .maybeSingle();
 
@@ -251,7 +263,7 @@ const DashboardPage = () => {
         const { data: existingAccountByBank, error: existingByBankError } = await supabase
           .from('accounts')
           .select('id')
-          .eq('user_id', authUser.id)
+          .eq('user_id', currentUserId)
           .eq('bank', selectedNewBank)
           .maybeSingle();
 
@@ -273,14 +285,14 @@ const DashboardPage = () => {
       }
 
       const { error: insertError } = await supabase.from('accounts').insert({
-        user_id: authUser.id,
+        user_id: currentUserId,
         bank_name: selectedNewBank,
         balance: 0
       });
 
       if (insertError) {
         const { error: insertByBankError } = await supabase.from('accounts').insert({
-          user_id: authUser.id,
+          user_id: currentUserId,
           bank: selectedNewBank,
           balance: 0
         });

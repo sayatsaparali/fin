@@ -12,9 +12,34 @@ type AccountRow = {
   bank?: string | null;
 };
 
+type ProfileIdRow = {
+  id: string;
+};
+
 const generateKzAccountNumber = () => {
   const digits = Array.from({ length: 18 }, () => Math.floor(Math.random() * 10)).join('');
   return `KZ${digits}`;
+};
+
+const resolveProfileId = async (authUserId: string) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Supabase не настроен');
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', authUserId)
+    .single<ProfileIdRow>();
+
+  if (profileError) {
+    throw profileError;
+  }
+
+  if (!profile?.id) {
+    throw new Error('Не найден профиль для инициализации счетов.');
+  }
+
+  return String(profile.id);
 };
 
 const upsertBankLabels = async (id: string, bankName: StandardBankName) => {
@@ -38,12 +63,12 @@ const upsertBankLabels = async (id: string, bankName: StandardBankName) => {
   }
 };
 
-const insertStandardAccount = async (userId: string, bankName: StandardBankName) => {
+const insertStandardAccount = async (currentUserId: string, bankName: StandardBankName) => {
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error('Supabase не настроен');
 
   const payload = {
-    user_id: userId,
+    user_id: currentUserId,
     bank_name: bankName,
     balance: STANDARD_BANK_BALANCES[bankName],
     account_number: generateKzAccountNumber()
@@ -53,7 +78,7 @@ const insertStandardAccount = async (userId: string, bankName: StandardBankName)
   if (!strictInsertError) return;
 
   const { error: fallbackInsertError } = await supabase.from('accounts').insert({
-    user_id: userId,
+    user_id: currentUserId,
     bank: bankName,
     balance: STANDARD_BANK_BALANCES[bankName],
     account_number: generateKzAccountNumber()
@@ -61,7 +86,7 @@ const insertStandardAccount = async (userId: string, bankName: StandardBankName)
   if (!fallbackInsertError) return;
 
   const { error: minimalInsertError } = await supabase.from('accounts').insert({
-    user_id: userId,
+    user_id: currentUserId,
     bank: bankName,
     balance: STANDARD_BANK_BALANCES[bankName]
   });
@@ -72,15 +97,17 @@ const insertStandardAccount = async (userId: string, bankName: StandardBankName)
 };
 
 export const ensureStandardAccountsForUser = async (
-  userId: string
+  authUserId: string
 ): Promise<{ created: number; totalStandard: number }> => {
   const supabase = getSupabaseClient();
   if (!supabase) return { created: 0, totalStandard: 0 };
 
+  const currentUserId = await resolveProfileId(authUserId);
+
   const { data: accountsByBankName, error: accountsByBankNameError } = await supabase
     .from('accounts')
     .select('id, bank_name')
-    .eq('user_id', userId);
+    .eq('user_id', currentUserId);
 
   let rows: AccountRow[] = [];
   if (!accountsByBankNameError) {
@@ -89,7 +116,7 @@ export const ensureStandardAccountsForUser = async (
     const { data: accountsByBank, error: accountsByBankError } = await supabase
       .from('accounts')
       .select('id, bank')
-      .eq('user_id', userId);
+      .eq('user_id', currentUserId);
 
     if (accountsByBankError) {
       throw accountsByBankError;
@@ -116,7 +143,7 @@ export const ensureStandardAccountsForUser = async (
   for (const bankName of STANDARD_BANK_NAMES) {
     if (existingStandardBanks.has(bankName)) continue;
     // eslint-disable-next-line no-await-in-loop
-    await insertStandardAccount(userId, bankName);
+    await insertStandardAccount(currentUserId, bankName);
     created += 1;
   }
 

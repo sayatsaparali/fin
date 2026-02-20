@@ -1,4 +1,5 @@
 import { getSupabaseClient } from './supabaseClient';
+import { resolveRequiredProfileIdByAuthUserId } from './profileIdentity';
 
 export type DailyAnalyticsPoint = {
   name: string;
@@ -66,19 +67,20 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   if (userError || !user) {
     throw userError ?? new Error('Пользователь не найден.');
   }
+  const profileUserId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
 
   // 1. Счета пользователя по банкам
   const { data: accountsByBankName, error: accountsByBankNameError } = await supabase
     .from('accounts')
     .select('id, bank_name, balance')
-    .eq('user_id', user.id);
+    .eq('user_id', profileUserId);
 
   let accounts = accountsByBankName;
   if (accountsByBankNameError) {
     const { data: accountsByBank, error: accountsByBankError } = await supabase
       .from('accounts')
       .select('id, bank, balance')
-      .eq('user_id', user.id);
+      .eq('user_id', profileUserId);
     if (accountsByBankError) {
       throw accountsByBankError;
     }
@@ -105,7 +107,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   const { data: transactionsByNewSchema, error: txNewSchemaError } = await supabase
     .from('transactions')
     .select('amount, type, date')
-    .eq('user_id', user.id)
+    .eq('user_id', profileUserId)
     .gte('date', weekAgo.toISOString())
     .order('date', { ascending: false })
     .limit(200);
@@ -122,7 +124,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     const { data: transactionsLegacy, error: txLegacyError } = await supabase
       .from('transactions')
       .select('amount, type, occurred_at')
-      .eq('user_id', user.id)
+      .eq('user_id', profileUserId)
       .gte('occurred_at', weekAgo.toISOString())
       .order('occurred_at', { ascending: false })
       .limit(200);
@@ -185,6 +187,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   if (userError || !user) {
     throw userError ?? new Error('Пользователь не найден.');
   }
+  const profileUserId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
 
   const monthAgo = new Date();
   monthAgo.setDate(monthAgo.getDate() - 30);
@@ -204,7 +207,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const { data: transactionsRichSchema, error: txRichSchemaError } = await supabase
     .from('transactions')
     .select('id, amount, description, category, counterparty, commission, bank, type, date')
-    .eq('user_id', user.id)
+    .eq('user_id', profileUserId)
     .gte('date', monthAgo.toISOString())
     .order('date', { ascending: false })
     .limit(120);
@@ -236,7 +239,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const { data: transactionsByNewSchema, error: txNewSchemaError } = await supabase
     .from('transactions')
     .select('id, amount, category, counterparty, date')
-    .eq('user_id', user.id)
+    .eq('user_id', profileUserId)
     .gte('date', monthAgo.toISOString())
     .order('date', { ascending: false })
     .limit(120);
@@ -267,7 +270,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const { data: transactionsLegacy, error: txLegacyError } = await supabase
     .from('transactions')
     .select('id, amount, type, description, counterparty, commission, occurred_at, bank')
-    .eq('user_id', user.id)
+    .eq('user_id', profileUserId)
     .gte('occurred_at', monthAgo.toISOString())
     .order('occurred_at', { ascending: false })
     .limit(120);
@@ -295,7 +298,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const { data: transactionsLegacyNoCommission, error: txLegacyNoCommissionError } = await supabase
     .from('transactions')
     .select('id, amount, type, description, counterparty, occurred_at, bank')
-    .eq('user_id', user.id)
+    .eq('user_id', profileUserId)
     .gte('occurred_at', monthAgo.toISOString())
     .order('occurred_at', { ascending: false })
     .limit(120);

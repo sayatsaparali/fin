@@ -3,6 +3,7 @@ import { Phone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits } from '../lib/phone';
+import { resolveRequiredProfileIdByAuthUserId } from '../lib/profileIdentity';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 type ProfileData = {
@@ -64,10 +65,12 @@ const ProfilePage = () => {
           throw userError ?? new Error('Пользователь не найден.');
         }
 
+        const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
+
         const { data, error: profileError } = await supabase
           .from('profiles')
           .select('first_name, last_name, phone_number, birth_date')
-          .eq('id', authUser.id)
+          .eq('id', profileId)
           .maybeSingle();
 
         if (profileError) {

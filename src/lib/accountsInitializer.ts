@@ -1,5 +1,9 @@
 import { getSupabaseClient } from './supabaseClient';
 import {
+  buildDeterministicAccountId,
+  resolveRequiredProfileIdByAuthUserId
+} from './profileIdentity';
+import {
   normalizeToStandardBankName,
   STANDARD_BANK_BALANCES,
   STANDARD_BANK_NAMES,
@@ -12,34 +16,9 @@ type AccountRow = {
   bank?: string | null;
 };
 
-type ProfileIdRow = {
-  id: string;
-};
-
 const generateKzAccountNumber = () => {
   const digits = Array.from({ length: 18 }, () => Math.floor(Math.random() * 10)).join('');
   return `KZ${digits}`;
-};
-
-const resolveProfileId = async (authUserId: string) => {
-  const supabase = getSupabaseClient();
-  if (!supabase) throw new Error('Supabase не настроен');
-
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('id', authUserId)
-    .single<ProfileIdRow>();
-
-  if (profileError) {
-    throw profileError;
-  }
-
-  if (!profile?.id) {
-    throw new Error('Не найден профиль для инициализации счетов.');
-  }
-
-  return String(profile.id);
 };
 
 const upsertBankLabels = async (id: string, bankName: StandardBankName) => {
@@ -67,7 +46,9 @@ const insertStandardAccount = async (currentUserId: string, bankName: StandardBa
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error('Supabase не настроен');
 
+  const deterministicAccountId = buildDeterministicAccountId(currentUserId, bankName);
   const payload = {
+    id: deterministicAccountId,
     user_id: currentUserId,
     bank_name: bankName,
     balance: STANDARD_BANK_BALANCES[bankName],
@@ -78,6 +59,7 @@ const insertStandardAccount = async (currentUserId: string, bankName: StandardBa
   if (!strictInsertError) return;
 
   const { error: fallbackInsertError } = await supabase.from('accounts').insert({
+    id: deterministicAccountId,
     user_id: currentUserId,
     bank: bankName,
     balance: STANDARD_BANK_BALANCES[bankName],
@@ -86,6 +68,7 @@ const insertStandardAccount = async (currentUserId: string, bankName: StandardBa
   if (!fallbackInsertError) return;
 
   const { error: minimalInsertError } = await supabase.from('accounts').insert({
+    id: deterministicAccountId,
     user_id: currentUserId,
     bank: bankName,
     balance: STANDARD_BANK_BALANCES[bankName]
@@ -96,13 +79,13 @@ const insertStandardAccount = async (currentUserId: string, bankName: StandardBa
   }
 };
 
-export const ensureStandardAccountsForUser = async (
-  authUserId: string
+export const ensureStandardAccountsForProfileId = async (
+  profileId: string
 ): Promise<{ created: number; totalStandard: number }> => {
   const supabase = getSupabaseClient();
   if (!supabase) return { created: 0, totalStandard: 0 };
 
-  const currentUserId = await resolveProfileId(authUserId);
+  const currentUserId = String(profileId);
 
   const { data: accountsByBankName, error: accountsByBankNameError } = await supabase
     .from('accounts')
@@ -148,4 +131,13 @@ export const ensureStandardAccountsForUser = async (
   }
 
   return { created, totalStandard: STANDARD_BANK_NAMES.length };
+};
+
+export const ensureStandardAccountsForUser = async (
+  authUserId: string
+): Promise<{ created: number; totalStandard: number }> => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return { created: 0, totalStandard: 0 };
+  const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUserId);
+  return ensureStandardAccountsForProfileId(profileId);
 };

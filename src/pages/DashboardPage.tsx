@@ -23,6 +23,10 @@ import {
   removeFavoriteContact,
   type FavoriteContact
 } from '../lib/favoritesApi';
+import {
+  buildDeterministicAccountId,
+  resolveRequiredProfileIdByAuthUserId
+} from '../lib/profileIdentity';
 import { getSupabaseClient } from '../lib/supabaseClient';
 import { getBankMeta } from '../lib/banks';
 import { STANDARD_BANK_NAMES, type StandardBankName } from '../lib/standardBanks';
@@ -159,10 +163,12 @@ const DashboardPage = () => {
           throw authError ?? new Error('Пользователь не найден.');
         }
 
+        const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
+
         const { data: profileData, error: profileError } = await supabase
           .from('profiles')
           .select('first_name')
-          .eq('id', authUser.id)
+          .eq('id', profileId)
           .maybeSingle();
 
         if (profileError) {
@@ -240,17 +246,7 @@ const DashboardPage = () => {
         throw userError ?? new Error('Пользователь не найден.');
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', authUser.id)
-        .single<{ id: string }>();
-
-      if (profileError || !profile?.id) {
-        throw profileError ?? new Error('Профиль не найден.');
-      }
-
-      const currentUserId = profile.id;
+      const currentUserId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
 
       const { data: existingAccount, error: existingError } = await supabase
         .from('accounts')
@@ -285,6 +281,7 @@ const DashboardPage = () => {
       }
 
       const { error: insertError } = await supabase.from('accounts').insert({
+        id: buildDeterministicAccountId(currentUserId, selectedNewBank),
         user_id: currentUserId,
         bank_name: selectedNewBank,
         balance: 0
@@ -292,6 +289,7 @@ const DashboardPage = () => {
 
       if (insertError) {
         const { error: insertByBankError } = await supabase.from('accounts').insert({
+          id: buildDeterministicAccountId(currentUserId, selectedNewBank),
           user_id: currentUserId,
           bank: selectedNewBank,
           balance: 0

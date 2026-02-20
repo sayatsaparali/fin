@@ -1,5 +1,6 @@
 -- FinHub: unique per-user life scenario transactions
--- Run this in Supabase SQL Editor once.
+-- Deterministic profile/account IDs compatible with YYMMDD-XXXXXX architecture.
+-- Run in Supabase SQL Editor when needed.
 
 create or replace function public.finhub_seed_new_user_scenario()
 returns trigger
@@ -17,27 +18,42 @@ declare
   tx_amount numeric;
   tx_bank text;
   occurred_at_ts timestamptz;
+  birth_dt date;
+  profile_id text;
 begin
   -- Deterministic but unique scenario per user (0 or 1)
   scenario_id := abs(hashtextextended(new.id::text, 73))::int % 2;
 
-  -- Ensure profile record exists (safe with register upsert)
-  insert into public.profiles (user_id, first_name, last_name, birth_date)
+  birth_dt := coalesce(
+    nullif(new.raw_user_meta_data ->> 'birth_date', '')::date,
+    current_date
+  );
+
+  profile_id := to_char(birth_dt, 'YYMMDD')
+    || '-'
+    || lpad((abs(hashtextextended(new.id::text, 3891))::bigint % 1000000)::text, 6, '0');
+
+  insert into public.profiles (id, auth_user_id, first_name, last_name, birth_date, phone_number)
   values (
+    profile_id,
     new.id,
     nullif(new.raw_user_meta_data ->> 'first_name', ''),
     nullif(new.raw_user_meta_data ->> 'last_name', ''),
-    nullif(new.raw_user_meta_data ->> 'birth_date', '')::date
+    nullif(new.raw_user_meta_data ->> 'birth_date', '')::date,
+    nullif(new.raw_user_meta_data ->> 'phone_number', '')
   )
-  on conflict (user_id) do nothing;
+  on conflict (auth_user_id) do update
+    set first_name = excluded.first_name,
+        last_name = excluded.last_name,
+        birth_date = excluded.birth_date,
+        phone_number = excluded.phone_number;
 
-  -- Base accounts for realistic dashboard split
-  insert into public.accounts (user_id, bank, balance)
+  insert into public.accounts (id, user_id, bank_name, balance)
   values
-    (new.id, 'Kaspi Gold', 1200000 + floor(random() * 500000)::int),
-    (new.id, 'Halyk', 700000 + floor(random() * 400000)::int),
-    (new.id, 'Наличные', 90000 + floor(random() * 180000)::int)
-  on conflict do nothing;
+    (profile_id || '-KASPI', profile_id, 'Kaspi Bank', 1200000 + floor(random() * 500000)::int),
+    (profile_id || '-HALYK', profile_id, 'Halyk Bank', 700000 + floor(random() * 400000)::int),
+    (profile_id || '-BCC', profile_id, 'BCC Bank', 90000 + floor(random() * 180000)::int)
+  on conflict (id) do nothing;
 
   -- Generate ~30 transactions over last 30 days
   for i in 1..30 loop
@@ -120,9 +136,9 @@ begin
 
     tx_bank :=
       case
-        when random() < 0.58 then 'Kaspi Gold'
-        when random() < 0.85 then 'Halyk'
-        else 'Наличные'
+        when random() < 0.58 then 'Kaspi Bank'
+        when random() < 0.85 then 'Halyk Bank'
+        else 'BCC Bank'
       end;
 
     occurred_at_ts :=
@@ -140,7 +156,7 @@ begin
       occurred_at
     )
     values (
-      new.id,
+      profile_id,
       tx_counterparty,
       tx_description,
       tx_type,

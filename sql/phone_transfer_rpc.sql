@@ -1,9 +1,9 @@
 -- FinHub: atomic phone transfer between users
 create or replace function public.execute_phone_transfer(
-  p_sender_user_id uuid,
-  p_sender_account_id uuid,
-  p_recipient_user_id uuid,
-  p_recipient_account_id uuid,
+  p_sender_user_id text,
+  p_sender_account_id text,
+  p_recipient_user_id text,
+  p_recipient_account_id text,
   p_amount numeric,
   p_commission numeric,
   p_sender_counterparty text,
@@ -27,7 +27,13 @@ begin
     raise exception 'Commission must be >= 0';
   end if;
 
-  select balance, bank
+  select
+    balance,
+    coalesce(
+      nullif((to_jsonb(accounts) ->> 'bank_name')::text, ''),
+      nullif((to_jsonb(accounts) ->> 'bank')::text, ''),
+      'Bank'
+    )
   into v_sender_balance, v_sender_bank
   from accounts
   where id = p_sender_account_id
@@ -38,7 +44,12 @@ begin
     raise exception 'Sender account not found';
   end if;
 
-  select bank
+  select
+    coalesce(
+      nullif((to_jsonb(accounts) ->> 'bank_name')::text, ''),
+      nullif((to_jsonb(accounts) ->> 'bank')::text, ''),
+      'Bank'
+    )
   into v_recipient_bank
   from accounts
   where id = p_recipient_account_id
@@ -167,10 +178,10 @@ end;
 $$;
 
 grant execute on function public.execute_phone_transfer(
-  uuid,
-  uuid,
-  uuid,
-  uuid,
+  text,
+  text,
+  text,
+  text,
   numeric,
   numeric,
   text,

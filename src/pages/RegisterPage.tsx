@@ -3,8 +3,12 @@ import { FormEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
-import { ensureStandardAccountsForUser } from '../lib/accountsInitializer';
+import { ensureStandardAccountsForProfileId } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
+import {
+  generateUniqueDeterministicProfileId,
+  resolveProfileByAuthUserId
+} from '../lib/profileIdentity';
 import { STANDARD_BANK_NAMES } from '../lib/standardBanks';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
@@ -165,8 +169,8 @@ const RegisterPage = () => {
         return;
       }
 
-      const userId = signUpData.user?.id;
-      if (!userId) {
+      const authUserId = signUpData.user?.id;
+      if (!authUserId) {
         setError('Auth вернул пустой user.id. Профиль не может быть создан.');
         return;
       }
@@ -179,17 +183,39 @@ const RegisterPage = () => {
         birth_date: birthDate
       };
 
-      const { data: profile, error: profileUpsertError } = await supabase
+      const existingProfile = await resolveProfileByAuthUserId(supabase, authUserId);
+      let profileId = existingProfile?.id ?? null;
+
+      if (!profileId) {
+        profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
+      }
+
+      const profilePayload = {
+        id: profileId,
+        auth_user_id: authUserId,
+        ...baseProfilePayload
+      };
+
+      const primaryProfileWrite = await supabase
         .from('profiles')
-        .upsert(
-          {
-            id: userId,
-            ...baseProfilePayload
-          },
-          { onConflict: 'id' }
-        )
+        .upsert(profilePayload, { onConflict: 'auth_user_id' })
         .select('id')
         .single<{ id: string }>();
+
+      const needsLegacyFallback =
+        primaryProfileWrite.error &&
+        String(primaryProfileWrite.error.code ?? '') === '42P10';
+
+      const fallbackProfileWrite = needsLegacyFallback
+        ? await supabase
+            .from('profiles')
+            .upsert(profilePayload, { onConflict: 'id' })
+            .select('id')
+            .single<{ id: string }>()
+        : null;
+
+      const profile = fallbackProfileWrite?.data ?? primaryProfileWrite.data;
+      const profileUpsertError = fallbackProfileWrite?.error ?? primaryProfileWrite.error;
 
       if (profileUpsertError) {
         // eslint-disable-next-line no-console
@@ -212,7 +238,7 @@ const RegisterPage = () => {
       }
 
       try {
-        await ensureStandardAccountsForUser(currentUserId);
+        await ensureStandardAccountsForProfileId(currentUserId);
 
         const { data: initializedByBankName, error: initializedByBankNameError } = await supabase
           .from('accounts')

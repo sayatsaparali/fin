@@ -27,6 +27,11 @@ import {
 import { ensureStandardAccountsForUser } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
 import {
+  extractProfileIdFromAccountId,
+  findProfileByAccountId,
+  resolveRequiredProfileIdByAuthUserId
+} from '../lib/profileIdentity';
+import {
   normalizeToStandardBankName,
   STANDARD_BANK_NAMES,
   type StandardBankName
@@ -198,7 +203,7 @@ const PaymentsPage = () => {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [favorites, setFavorites] = useState<FavoriteContact[]>([]);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
-  const [authUserId, setAuthUserId] = useState<string | null>(null);
+  const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [ownPhoneDigits, setOwnPhoneDigits] = useState('');
   const [recipientName, setRecipientName] = useState<string | null>(null);
   const [recipientUserId, setRecipientUserId] = useState<string | null>(null);
@@ -261,14 +266,15 @@ const PaymentsPage = () => {
         if (userError || !user) {
           throw userError ?? new Error('Пользователь не найден.');
         }
-        setAuthUserId(user.id);
+        const currentProfileId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
+        setProfileUserId(currentProfileId);
 
-        const normalized = await fetchUserAccounts(supabase, user.id);
+        const normalized = await fetchUserAccounts(supabase, currentProfileId);
         if (normalized.length === 0) {
           await ensureStandardAccountsForUser(user.id);
         }
         const normalizedAfterInit =
-          normalized.length > 0 ? normalized : await fetchUserAccounts(supabase, user.id);
+          normalized.length > 0 ? normalized : await fetchUserAccounts(supabase, currentProfileId);
         if (!isMounted) return;
 
         setAccounts(normalizedAfterInit);
@@ -280,7 +286,7 @@ const PaymentsPage = () => {
         const { data: ownProfile } = await supabase
           .from('profiles')
           .select('phone_number')
-          .eq('id', user.id)
+          .eq('id', currentProfileId)
           .maybeSingle();
         setOwnPhoneDigits(
           extractKzPhoneDigits((ownProfile as { phone_number?: string } | null)?.phone_number)
@@ -729,7 +735,7 @@ const PaymentsPage = () => {
       const enteredPhoneDigits = phoneDigits;
       if (
         (ownPhoneDigits && enteredPhoneDigits === ownPhoneDigits) ||
-        (recipientUserId && authUserId && recipientUserId === authUserId)
+        (recipientUserId && profileUserId && recipientUserId === profileUserId)
       ) {
         setError('Нельзя перевести деньги самому себе по номеру телефона.');
         return;
@@ -760,7 +766,7 @@ const PaymentsPage = () => {
     setIsSubmitting(true);
 
     try {
-      if (!authUserId) {
+      if (!profileUserId) {
         throw new Error('Не удалось определить пользователя для операции.');
       }
 
@@ -792,7 +798,7 @@ const PaymentsPage = () => {
         );
 
         await createTransactionRecord({
-          userId: authUserId,
+          userId: profileUserId,
           amount: -totalDebit,
           description: `Перевод на свой счет ${destinationAccount.bank}`,
           counterparty: destinationAccount.bank,
@@ -802,7 +808,7 @@ const PaymentsPage = () => {
           kind: 'expense'
         });
         await createTransactionRecord({
-          userId: authUserId,
+          userId: profileUserId,
           amount: amountValue,
           description: `Перевод со своего счета ${sourceAccount.bank}`,
           counterparty: sourceAccount.bank,
@@ -842,8 +848,20 @@ const PaymentsPage = () => {
           return;
         }
 
+        const ownerIdFromRecipientAccount = extractProfileIdFromAccountId(recipientAccountForPhone?.id);
+        const recipientOwnerProfile = recipientAccountForPhone?.id
+          ? await findProfileByAccountId(supabase, recipientAccountForPhone.id)
+          : null;
+        if (
+          (ownerIdFromRecipientAccount && ownerIdFromRecipientAccount !== recipientUserId) ||
+          (recipientOwnerProfile?.id && recipientOwnerProfile.id !== recipientUserId)
+        ) {
+          setError('Ошибка сопоставления счета получателя. Попробуйте выбрать банк заново.');
+          return;
+        }
+
         const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
-          p_sender_user_id: authUserId,
+          p_sender_user_id: profileUserId,
           p_sender_account_id: sourceAccount.id,
           p_recipient_user_id: recipientUserId,
           p_recipient_account_id: recipientAccountForPhone?.id,
@@ -884,7 +902,7 @@ const PaymentsPage = () => {
             : `Перевод на карту ${cardNumber.replace(/\D/g, '').slice(-4)}`;
 
         await createTransactionRecord({
-          userId: authUserId,
+          userId: profileUserId,
           amount: -totalDebit,
           description: transferDescription,
           counterparty: transferCounterparty,

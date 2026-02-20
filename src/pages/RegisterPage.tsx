@@ -183,55 +183,101 @@ const RegisterPage = () => {
         birth_date: birthDate
       };
 
+      // Шаг 1: Проверяем, создал ли триггер профиль автоматически
       const existingProfile = await resolveProfileByAuthUserId(supabase, authUserId);
-      let profileId = existingProfile?.id ?? null;
+      let currentUserId: string | null = existingProfile?.id ?? null;
 
-      if (!profileId) {
-        profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
+      if (currentUserId) {
+        // Триггер уже создал профиль — обновляем только метаданные, НЕ трогая id
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update(baseProfilePayload)
+          .eq('id', currentUserId);
+
+        if (updateError) {
+          // eslint-disable-next-line no-console
+          console.error('Supabase profiles update error:', updateError);
+          setError(
+            formatSupabaseError('Ошибка обновления профиля', {
+              message: updateError.message,
+              details: updateError.details ?? undefined,
+              hint: updateError.hint ?? undefined,
+              code: updateError.code ?? undefined
+            })
+          );
+          return;
+        }
+      } else {
+        // Шаг 2: Триггер не создал профиль — создаём с клиента
+        const profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
+
+        // Попытка 1: вставка с auth_user_id (если колонка существует)
+        const fullPayload = {
+          id: profileId,
+          auth_user_id: authUserId,
+          ...baseProfilePayload
+        };
+        const { data: insertedFull, error: insertFullError } = await supabase
+          .from('profiles')
+          .insert(fullPayload)
+          .select('id')
+          .single<{ id: string }>();
+
+        if (!insertFullError && insertedFull?.id) {
+          currentUserId = insertedFull.id;
+        } else {
+          const isMissingCol =
+            String(insertFullError?.code ?? '') === '42703' ||
+            String(insertFullError?.message ?? '')
+              .toLowerCase()
+              .includes('auth_user_id');
+
+          if (isMissingCol) {
+            // Попытка 2: вставка без auth_user_id (колонка не существует)
+            // eslint-disable-next-line no-console
+            console.warn(
+              'Колонка auth_user_id не найдена в profiles — вставка без неё. Выполните SQL миграцию deterministic_identity_migration.sql.'
+            );
+            const legacyPayload = {
+              id: profileId,
+              ...baseProfilePayload
+            };
+            const { data: insertedLegacy, error: insertLegacyError } = await supabase
+              .from('profiles')
+              .insert(legacyPayload)
+              .select('id')
+              .single<{ id: string }>();
+
+            if (insertLegacyError) {
+              // eslint-disable-next-line no-console
+              console.error('Supabase profiles insert (legacy) error:', insertLegacyError);
+              setError(
+                formatSupabaseError('Ошибка записи профиля', {
+                  message: insertLegacyError.message,
+                  details: insertLegacyError.details ?? undefined,
+                  hint: insertLegacyError.hint ?? undefined,
+                  code: insertLegacyError.code ?? undefined
+                })
+              );
+              return;
+            }
+            currentUserId = insertedLegacy?.id ?? null;
+          } else {
+            // eslint-disable-next-line no-console
+            console.error('Supabase profiles insert error:', insertFullError);
+            setError(
+              formatSupabaseError('Ошибка записи профиля', {
+                message: insertFullError?.message ?? 'Unknown error',
+                details: insertFullError?.details ?? undefined,
+                hint: insertFullError?.hint ?? undefined,
+                code: insertFullError?.code ?? undefined
+              })
+            );
+            return;
+          }
+        }
       }
 
-      const profilePayload = {
-        id: profileId,
-        auth_user_id: authUserId,
-        ...baseProfilePayload
-      };
-
-      const primaryProfileWrite = await supabase
-        .from('profiles')
-        .upsert(profilePayload, { onConflict: 'auth_user_id' })
-        .select('id')
-        .single<{ id: string }>();
-
-      const needsLegacyFallback =
-        primaryProfileWrite.error &&
-        String(primaryProfileWrite.error.code ?? '') === '42P10';
-
-      const fallbackProfileWrite = needsLegacyFallback
-        ? await supabase
-            .from('profiles')
-            .upsert(profilePayload, { onConflict: 'id' })
-            .select('id')
-            .single<{ id: string }>()
-        : null;
-
-      const profile = fallbackProfileWrite?.data ?? primaryProfileWrite.data;
-      const profileUpsertError = fallbackProfileWrite?.error ?? primaryProfileWrite.error;
-
-      if (profileUpsertError) {
-        // eslint-disable-next-line no-console
-        console.error('Supabase profiles upsert error:', profileUpsertError);
-        setError(
-          formatSupabaseError('Ошибка записи профиля', {
-            message: profileUpsertError.message,
-            details: profileUpsertError.details ?? undefined,
-            hint: profileUpsertError.hint ?? undefined,
-            code: profileUpsertError.code ?? undefined
-          })
-        );
-        return;
-      }
-
-      const currentUserId = profile?.id;
       if (!currentUserId) {
         setError('Профиль создан без id. Инициализация счетов остановлена.');
         return;

@@ -19,3 +19,27 @@ export const getSupabaseClient = () => {
   supabase = createClient(supabaseUrl, supabaseAnonKey);
   return supabase;
 };
+
+/**
+ * Сброс кэша Supabase клиента.
+ * Вызывайте при ошибках схемы (42703, 42P10) — следующий вызов
+ * getSupabaseClient() создаст новое подключение.
+ */
+export const refreshSupabaseClient = () => {
+  supabase = null;
+};
+
+/** Проверяет, является ли ошибка связанной со схемой/кэшем Supabase */
+export const isSchemaRelatedError = (
+  error: { code?: string; message?: string } | null | undefined
+): boolean => {
+  if (!error) return false;
+  const code = String(error.code ?? '');
+  const message = String(error.message ?? '').toLowerCase();
+  return (
+    code === '42703' || // undefined column
+    code === '42P10' || // invalid column reference
+    message.includes('column') ||
+    message.includes('schema cache')
+  );
+};

@@ -15,9 +15,10 @@ alter table public.transactions
 --   and occurred_at >= now() - interval '31 days';
 
 with target_user as (
-  select id
-  from auth.users
-  order by created_at desc
+  select p.id
+  from auth.users u
+  join public.profiles p on p.auth_user_id = u.id
+  order by u.created_at desc
   limit 1
 ),
 seed(counterparty, description, type, amount, bank, days_ago, hour_of_day) as (

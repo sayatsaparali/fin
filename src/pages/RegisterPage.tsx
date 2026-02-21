@@ -6,6 +6,7 @@ import { useUser } from '../context/UserContext';
 import { ensureStandardAccountsForProfileId } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
 import {
+  ensureAuthUserIdLinked,
   generateUniqueDeterministicProfileId,
   resolveProfileByAuthUserId
 } from '../lib/profileIdentity';
@@ -61,8 +62,7 @@ const formatSupabaseError = (
   title: string,
   error: { message: string; details?: string; hint?: string; code?: string }
 ) =>
-  `${title}: ${error.message}${error.details ? ` | details: ${error.details}` : ''}${
-    error.hint ? ` | hint: ${error.hint}` : ''
+  `${title}: ${error.message}${error.details ? ` | details: ${error.details}` : ''}${error.hint ? ` | hint: ${error.hint}` : ''
   }${error.code ? ` | code: ${error.code}` : ''}`;
 
 const RegisterPage = () => {
@@ -207,6 +207,9 @@ const RegisterPage = () => {
           );
           return;
         }
+
+        // Гарантируем, что auth_user_id заполнен ПЕРЕД созданием счетов
+        await ensureAuthUserIdLinked(supabase, currentUserId, authUserId);
       } else {
         // Шаг 2: Триггер не создал профиль — создаём с клиента
         const profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
@@ -396,13 +399,12 @@ const RegisterPage = () => {
           {[1, 2, 3].map((s) => (
             <div
               key={s}
-              className={`rounded-full px-2 py-1 text-center text-[11px] font-medium transition ${
-                step === s
-                  ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/60'
-                  : step > s
-                    ? 'bg-slate-700/70 text-slate-200'
-                    : 'bg-slate-800/70 text-slate-400'
-              }`}
+              className={`rounded-full px-2 py-1 text-center text-[11px] font-medium transition ${step === s
+                ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/60'
+                : step > s
+                  ? 'bg-slate-700/70 text-slate-200'
+                  : 'bg-slate-800/70 text-slate-400'
+                }`}
             >
               Шаг {s}
             </div>

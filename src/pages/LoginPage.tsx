@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
 import { getSupabaseClient } from '../lib/supabaseClient';
+import { resolveRequiredProfileIdByAuthUserId } from '../lib/profileIdentity';
 
 const emailRegex = /\S+@\S+\.\S+/;
 
@@ -44,6 +45,14 @@ const LoginPage = () => {
       // eslint-disable-next-line no-console
       if (signInError) console.error(signInError);
       return;
+    }
+
+    // Авто-ремонт: гарантируем, что auth_user_id заполнен в профиле
+    try {
+      await resolveRequiredProfileIdByAuthUserId(supabase, data.user.id);
+    } catch (profileError) {
+      // eslint-disable-next-line no-console
+      console.error('Авто-ремонт auth_user_id при входе не удался:', profileError);
     }
 
     const emailVerified = Boolean(data.user.email_confirmed_at);

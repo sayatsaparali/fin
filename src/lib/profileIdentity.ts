@@ -63,10 +63,10 @@ export const buildDeterministicAccountId = (
   const bankCode = normalizedBankName
     ? BANK_CODE_BY_NAME[normalizedBankName]
     : String(bankName ?? '')
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]+/g, '_')
-        .replace(/^_+|_+$/g, '') || 'BANK';
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'BANK';
   return `${profileId}-${bankCode}`;
 };
 
@@ -131,6 +131,53 @@ export const resolveProfileByAuthUserId = async (
   return null;
 };
 
+/**
+ * Гарантирует, что auth_user_id заполнен в профиле.
+ * Если колонка пуста — записывает authUserId.
+ * Если колонка не существует — пропускает без ошибки.
+ */
+export const ensureAuthUserIdLinked = async (
+  supabase: SupabaseClient,
+  profileId: string,
+  authUserId: string
+): Promise<void> => {
+  // Сначала проверяем текущее значение
+  const { data: profile, error: selectError } = await supabase
+    .from('profiles')
+    .select('auth_user_id')
+    .eq('id', profileId)
+    .maybeSingle();
+
+  // Колонка не существует — пропускаем
+  if (selectError && isMissingColumnError(selectError, 'auth_user_id')) {
+    return;
+  }
+
+  if (selectError) {
+    // eslint-disable-next-line no-console
+    console.error('ensureAuthUserIdLinked: ошибка чтения профиля', selectError);
+    return;
+  }
+
+  const currentValue = (profile as { auth_user_id?: string | null } | null)?.auth_user_id;
+
+  // Уже заполнено правильным значением
+  if (currentValue === authUserId) {
+    return;
+  }
+
+  // Пусто или другое значение — обновляем
+  const { error: updateError } = await supabase
+    .from('profiles')
+    .update({ auth_user_id: authUserId })
+    .eq('id', profileId);
+
+  if (updateError && !isMissingColumnError(updateError, 'auth_user_id')) {
+    // eslint-disable-next-line no-console
+    console.error('ensureAuthUserIdLinked: ошибка обновления auth_user_id', updateError);
+  }
+};
+
 export const resolveRequiredProfileIdByAuthUserId = async (
   supabase: SupabaseClient,
   authUserId: string
@@ -139,6 +186,10 @@ export const resolveRequiredProfileIdByAuthUserId = async (
   if (!resolved?.id) {
     throw new Error('Профиль пользователя не найден.');
   }
+
+  // Авто-ремонт: если профиль найден, но auth_user_id мог быть пустым
+  await ensureAuthUserIdLinked(supabase, resolved.id, authUserId);
+
   return resolved.id;
 };
 

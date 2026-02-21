@@ -85,14 +85,14 @@ export type ResolvedProfileIdentity = {
 };
 
 /**
- * Ищет профиль по auth_user_id (TEXT колонка в profiles).
+ * Ищет пользователя в new_polzovateli по auth_user_id.
  */
 export const resolveProfileByAuthUserId = async (
   supabase: SupabaseClient,
   authUserId: string
 ): Promise<ResolvedProfileIdentity | null> => {
   const { data, error } = await supabase
-    .from('profiles')
+    .from('new_polzovateli')
     .select('id, auth_user_id')
     .eq('auth_user_id', authUserId)
     .maybeSingle();
@@ -110,7 +110,7 @@ export const resolveProfileByAuthUserId = async (
 };
 
 /**
- * Гарантирует, что auth_user_id заполнен в профиле.
+ * Гарантирует, что auth_user_id заполнен.
  */
 export const ensureAuthUserIdLinked = async (
   supabase: SupabaseClient,
@@ -118,14 +118,14 @@ export const ensureAuthUserIdLinked = async (
   authUserId: string
 ): Promise<void> => {
   const { data: profile, error: selectError } = await supabase
-    .from('profiles')
+    .from('new_polzovateli')
     .select('auth_user_id')
     .eq('id', profileId)
     .maybeSingle();
 
   if (selectError) {
     // eslint-disable-next-line no-console
-    console.error('ensureAuthUserIdLinked: ошибка чтения профиля', selectError);
+    console.error('ensureAuthUserIdLinked: ошибка чтения', selectError);
     return;
   }
 
@@ -133,7 +133,7 @@ export const ensureAuthUserIdLinked = async (
   if (currentValue === authUserId) return;
 
   const { error: updateError } = await supabase
-    .from('profiles')
+    .from('new_polzovateli')
     .update({ auth_user_id: authUserId })
     .eq('id', profileId);
 
@@ -164,7 +164,7 @@ export const findProfileByAccountId = async (
   if (!profileId) return null;
 
   const { data, error } = await supabase
-    .from('profiles')
+    .from('new_polzovateli')
     .select('id, auth_user_id')
     .eq('id', profileId)
     .maybeSingle();
@@ -192,7 +192,7 @@ export const generateUniqueDeterministicProfileId = async (
 
     // eslint-disable-next-line no-await-in-loop
     const { data: existing, error: existingError } = await supabase
-      .from('profiles')
+      .from('new_polzovateli')
       .select('id')
       .eq('id', candidate)
       .maybeSingle();

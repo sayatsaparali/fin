@@ -54,7 +54,6 @@ const buildFallbackData = (): DashboardData => ({
 export const fetchDashboardData = async (): Promise<DashboardData> => {
   const supabase = getSupabaseClient();
 
-  // Если Supabase не настроен — возвращаем демо-данные
   if (!supabase) {
     return buildFallbackData();
   }
@@ -69,79 +68,48 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   }
   const profileUserId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
 
-  // 1. Счета пользователя по банкам
-  const { data: accountsByBankName, error: accountsByBankNameError } = await supabase
-    .from('accounts')
-    .select('id, bank_name, balance')
-    .eq('user_id', profileUserId);
+  // 1. Счета из new_scheta
+  const { data: accountsData, error: accountsError } = await supabase
+    .from('new_scheta')
+    .select('id, nazvanie_banka, balans')
+    .eq('vladilec_id', profileUserId);
 
-  let accounts = accountsByBankName;
-  if (accountsByBankNameError) {
-    const { data: accountsByBank, error: accountsByBankError } = await supabase
-      .from('accounts')
-      .select('id, bank, balance')
-      .eq('user_id', profileUserId);
-    if (accountsByBankError) {
-      throw accountsByBankError;
-    }
-    accounts = accountsByBank;
-  }
+  if (accountsError) throw accountsError;
 
-  const normalizedAccounts: DashboardAccount[] = (accounts ?? []).map((acc) => ({
+  const normalizedAccounts: DashboardAccount[] = (accountsData ?? []).map((acc) => ({
     id: String(acc.id ?? crypto.randomUUID()),
-    bank: String(
-      (acc as { bank_name?: string; bank?: string }).bank_name ??
-        (acc as { bank?: string }).bank ??
-        'Bank account'
-    ),
-    balance: Number(acc.balance ?? 0)
+    bank: String((acc as { nazvanie_banka?: string }).nazvanie_banka ?? 'Bank account'),
+    balance: Number((acc as { balans?: number }).balans ?? 0)
   }));
 
   const totalBalance = normalizedAccounts.reduce((acc, item) => acc + item.balance, 0);
 
-  // 2. Транзакции за последнюю неделю для аналитики
+  // 2. Транзакции за неделю из new_tranzakcii
   const now = new Date();
   const weekAgo = new Date(now);
   weekAgo.setDate(now.getDate() - 6);
 
-  const { data: transactionsByNewSchema, error: txNewSchemaError } = await supabase
-    .from('transactions')
+  const { data: transactionsData, error: txError } = await supabase
+    .from('new_tranzakcii')
     .select('amount, type, date')
     .eq('user_id', profileUserId)
     .gte('date', weekAgo.toISOString())
     .order('date', { ascending: false })
     .limit(200);
 
-  let normalizedTransactions: Array<{ amount: number; type: string; occurredAt: string }> = [];
+  const normalizedTransactions: Array<{ amount: number; type: string; occurredAt: string }> = [];
 
-  if (!txNewSchemaError) {
-    normalizedTransactions = (transactionsByNewSchema ?? []).map((tx) => ({
-      amount: Number(tx.amount ?? 0),
-      type: String(tx.type ?? ''),
-      occurredAt: String(tx.date ?? '')
-    }));
-  } else {
-    const { data: transactionsLegacy, error: txLegacyError } = await supabase
-      .from('transactions')
-      .select('amount, type, occurred_at')
-      .eq('user_id', profileUserId)
-      .gte('occurred_at', weekAgo.toISOString())
-      .order('occurred_at', { ascending: false })
-      .limit(200);
-
-    if (txLegacyError) {
-      throw txLegacyError;
+  if (!txError) {
+    for (const tx of transactionsData ?? []) {
+      normalizedTransactions.push({
+        amount: Number(tx.amount ?? 0),
+        type: String(tx.type ?? ''),
+        occurredAt: String(tx.date ?? '')
+      });
     }
-
-    normalizedTransactions = (transactionsLegacy ?? []).map((tx) => ({
-      amount: Number(tx.amount ?? 0),
-      type: String(tx.type ?? ''),
-      occurredAt: String(tx.occurred_at ?? '')
-    }));
   }
 
   const analyticsMap: Record<string, DailyAnalyticsPoint> = {};
-
   weekdayLabels.forEach((label) => {
     analyticsMap[label] = { name: label, income: 0, expense: 0 };
   });
@@ -150,9 +118,8 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     const date = new Date(tx.occurredAt);
     if (Number.isNaN(date.getTime()) || date < weekAgo) return;
 
-    const dayIndex = date.getDay(); // 0 (Вс) - 6 (Сб)
+    const dayIndex = date.getDay();
     const label = weekdayLabels[dayIndex];
-
     const amount = tx.amount;
     const type = tx.type;
 
@@ -163,7 +130,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     }
   });
 
-  const analytics = weekdayLabels
+  const analytics = ([...weekdayLabels] as string[])
     .filter((l) => l !== 'Вс')
     .concat(['Вс'])
     .map((label) => analyticsMap[label]);
@@ -204,123 +171,34 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     return 'other';
   };
 
-  const { data: transactionsRichSchema, error: txRichSchemaError } = await supabase
-    .from('transactions')
+  const { data: transactionsData, error: txError } = await supabase
+    .from('new_tranzakcii')
     .select('id, amount, description, category, counterparty, commission, bank, type, date')
     .eq('user_id', profileUserId)
     .gte('date', monthAgo.toISOString())
     .order('date', { ascending: false })
     .limit(120);
 
-  if (!txRichSchemaError) {
-    return (transactionsRichSchema ?? []).map((tx) => {
-      const amount = Number(tx.amount ?? 0);
-      const description = tx.description ? String(tx.description) : null;
-      const category = tx.category ? String(tx.category) : null;
-      const counterparty = tx.counterparty ? String(tx.counterparty) : null;
-      const commission = Number(tx.commission ?? 0);
-      const kind = normalizeKind(String(tx.type ?? ''), amount);
-      const bank = tx.bank ? String(tx.bank) : null;
+  if (txError) throw txError;
 
-      return {
-        id: String(tx.id ?? crypto.randomUUID()),
-        amount,
-        description,
-        category,
-        counterparty,
-        commission,
-        bank,
-        date: String(tx.date ?? ''),
-        kind
-      };
-    });
-  }
-
-  const { data: transactionsByNewSchema, error: txNewSchemaError } = await supabase
-    .from('transactions')
-    .select('id, amount, category, counterparty, date')
-    .eq('user_id', profileUserId)
-    .gte('date', monthAgo.toISOString())
-    .order('date', { ascending: false })
-    .limit(120);
-
-  if (!txNewSchemaError) {
-    return (transactionsByNewSchema ?? []).map((tx) => {
-      const amount = Number(tx.amount ?? 0);
-      const category = tx.category ? String(tx.category) : null;
-      const counterparty = tx.counterparty ? String(tx.counterparty) : null;
-      const kind = normalizeKind(null, amount);
-
-      return {
-        id: String(tx.id ?? crypto.randomUUID()),
-        amount,
-        description: category,
-        category,
-        counterparty,
-        commission: 0,
-        bank: null,
-        date: String(tx.date ?? ''),
-        kind
-      };
-    });
-  }
-
-  // eslint-disable-next-line no-console
-  console.log('Transactions new schema query failed, fallback applied:', txRichSchemaError?.message ?? txNewSchemaError.message);
-  const { data: transactionsLegacy, error: txLegacyError } = await supabase
-    .from('transactions')
-    .select('id, amount, type, description, counterparty, commission, occurred_at, bank')
-    .eq('user_id', profileUserId)
-    .gte('occurred_at', monthAgo.toISOString())
-    .order('occurred_at', { ascending: false })
-    .limit(120);
-
-  if (!txLegacyError) {
-    return (transactionsLegacy ?? []).map((tx) => {
-      const amount = Number(tx.amount ?? 0);
-      const description = tx.description ? String(tx.description) : null;
-      const category = tx.description ? String(tx.description) : tx.bank ? String(tx.bank) : null;
-      const kind = normalizeKind(String(tx.type ?? ''), amount);
-      return {
-        id: String(tx.id ?? crypto.randomUUID()),
-        amount,
-        description,
-        category,
-        counterparty: tx.counterparty ? String(tx.counterparty) : null,
-        commission: Number(tx.commission ?? 0),
-        bank: tx.bank ? String(tx.bank) : null,
-        date: String(tx.occurred_at ?? ''),
-        kind
-      };
-    });
-  }
-
-  const { data: transactionsLegacyNoCommission, error: txLegacyNoCommissionError } = await supabase
-    .from('transactions')
-    .select('id, amount, type, description, counterparty, occurred_at, bank')
-    .eq('user_id', profileUserId)
-    .gte('occurred_at', monthAgo.toISOString())
-    .order('occurred_at', { ascending: false })
-    .limit(120);
-
-  if (txLegacyNoCommissionError) {
-    throw txLegacyNoCommissionError;
-  }
-
-  return (transactionsLegacyNoCommission ?? []).map((tx) => {
+  return (transactionsData ?? []).map((tx) => {
     const amount = Number(tx.amount ?? 0);
     const description = tx.description ? String(tx.description) : null;
-    const category = tx.description ? String(tx.description) : tx.bank ? String(tx.bank) : null;
+    const category = tx.category ? String(tx.category) : null;
+    const counterparty = tx.counterparty ? String(tx.counterparty) : null;
+    const commission = Number(tx.commission ?? 0);
     const kind = normalizeKind(String(tx.type ?? ''), amount);
+    const bank = tx.bank ? String(tx.bank) : null;
+
     return {
       id: String(tx.id ?? crypto.randomUUID()),
       amount,
       description,
       category,
-      counterparty: tx.counterparty ? String(tx.counterparty) : null,
-      commission: 0,
-      bank: tx.bank ? String(tx.bank) : null,
-      date: String(tx.occurred_at ?? ''),
+      counterparty,
+      commission,
+      bank,
+      date: String(tx.date ?? ''),
       kind
     };
   });

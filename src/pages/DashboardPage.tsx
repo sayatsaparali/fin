@@ -166,8 +166,8 @@ const DashboardPage = () => {
         const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
 
         const { data: profileData, error: profileError } = await supabase
-          .from('profiles')
-          .select('first_name')
+          .from('new_polzovateli')
+          .select('imya')
           .eq('id', profileId)
           .maybeSingle();
 
@@ -176,7 +176,7 @@ const DashboardPage = () => {
         }
 
         if (!isMounted) return;
-        const name = String((profileData as { first_name?: string | null } | null)?.first_name ?? '').trim();
+        const name = String((profileData as { imya?: string | null } | null)?.imya ?? '').trim();
         setProfileFirstName(name || null);
       } catch (profileLoadError) {
         if (!isMounted) return;
@@ -249,30 +249,13 @@ const DashboardPage = () => {
       const currentUserId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
 
       const { data: existingAccount, error: existingError } = await supabase
-        .from('accounts')
+        .from('new_scheta')
         .select('id')
-        .eq('user_id', currentUserId)
-        .eq('bank_name', selectedNewBank)
+        .eq('vladilec_id', currentUserId)
+        .eq('nazvanie_banka', selectedNewBank)
         .maybeSingle();
 
-      if (existingError) {
-        const { data: existingAccountByBank, error: existingByBankError } = await supabase
-          .from('accounts')
-          .select('id')
-          .eq('user_id', currentUserId)
-          .eq('bank', selectedNewBank)
-          .maybeSingle();
-
-        if (existingByBankError) {
-          throw existingByBankError;
-        }
-
-        if (existingAccountByBank) {
-          setError(`Счет ${selectedNewBank} уже подключен.`);
-          setIsAddBankModalOpen(false);
-          return;
-        }
-      }
+      if (existingError) throw existingError;
 
       if (existingAccount) {
         setError(`Счет ${selectedNewBank} уже подключен.`);
@@ -280,24 +263,14 @@ const DashboardPage = () => {
         return;
       }
 
-      const { error: insertError } = await supabase.from('accounts').insert({
+      const { error: insertError } = await supabase.from('new_scheta').insert({
         id: buildDeterministicAccountId(currentUserId, selectedNewBank),
-        user_id: currentUserId,
-        bank_name: selectedNewBank,
-        balance: 0
+        vladilec_id: currentUserId,
+        nazvanie_banka: selectedNewBank,
+        balans: 0
       });
 
-      if (insertError) {
-        const { error: insertByBankError } = await supabase.from('accounts').insert({
-          id: buildDeterministicAccountId(currentUserId, selectedNewBank),
-          user_id: currentUserId,
-          bank: selectedNewBank,
-          balance: 0
-        });
-        if (insertByBankError) {
-          throw insertByBankError;
-        }
-      }
+      if (insertError) throw insertError;
 
       window.dispatchEvent(new Event('finhub:accounts-updated'));
       setIsAddBankModalOpen(false);
@@ -609,11 +582,11 @@ const DashboardPage = () => {
                 {loading || !dashboardData
                   ? 'Загрузка аналитики...'
                   : `Средний чистый поток: ${formatCurrency(
-                      dashboardData.analytics.reduce(
-                        (acc, d) => acc + (d.income - d.expense),
-                        0
-                      ) / dashboardData.analytics.length
-                    ).replace('KZT', '₸')}`}
+                    dashboardData.analytics.reduce(
+                      (acc, d) => acc + (d.income - d.expense),
+                      0
+                    ) / dashboardData.analytics.length
+                  ).replace('KZT', '₸')}`}
               </div>
             </div>
 
@@ -794,11 +767,10 @@ const DashboardPage = () => {
                       key={bankName}
                       type="button"
                       onClick={() => setSelectedNewBank(bankName)}
-                      className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${
-                        selectedNewBank === bankName
+                      className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${selectedNewBank === bankName
                           ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
                           : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                      }`}
+                        }`}
                     >
                       <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
                         {bankMeta.logo}

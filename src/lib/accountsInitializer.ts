@@ -10,23 +10,17 @@ import {
   type StandardBankName
 } from './standardBanks';
 
-const generateKzAccountNumber = () => {
-  const digits = Array.from({ length: 18 }, () => Math.floor(Math.random() * 10)).join('');
-  return `KZ${digits}`;
-};
-
 const insertStandardAccount = async (profileId: string, bankName: StandardBankName) => {
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error('Supabase не настроен');
 
   const accountId = buildDeterministicAccountId(profileId, bankName);
 
-  const { error } = await supabase.from('accounts').insert({
+  const { error } = await supabase.from('new_scheta').insert({
     id: accountId,
-    user_id: profileId,
-    bank_name: bankName,
-    balance: STANDARD_BANK_BALANCES[bankName],
-    account_number: generateKzAccountNumber()
+    vladilec_id: profileId,
+    nazvanie_banka: bankName,
+    balans: STANDARD_BANK_BALANCES[bankName]
   });
 
   if (error) throw error;
@@ -39,16 +33,16 @@ export const ensureStandardAccountsForProfileId = async (
   if (!supabase) return { created: 0, totalStandard: 0 };
 
   const { data: existingAccounts, error: fetchError } = await supabase
-    .from('accounts')
-    .select('id, bank_name')
-    .eq('user_id', profileId);
+    .from('new_scheta')
+    .select('id, nazvanie_banka')
+    .eq('vladilec_id', profileId);
 
   if (fetchError) throw fetchError;
 
   const existingBanks = new Set<StandardBankName>();
   for (const row of existingAccounts ?? []) {
     const normalized = normalizeToStandardBankName(
-      (row as { bank_name?: string }).bank_name
+      (row as { nazvanie_banka?: string }).nazvanie_banka
     );
     if (normalized) existingBanks.add(normalized);
   }

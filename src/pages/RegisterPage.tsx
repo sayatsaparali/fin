@@ -162,18 +162,17 @@ const RegisterPage = () => {
         return;
       }
 
-      // --- Создание профиля (TEXT ID: YYMMDD-XXXXXX) ---
+      // --- Создание профиля в new_polzovateli (TEXT ID: YYMMDD-XXXXXX) ---
       const profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
 
       const { error: profileInsertError } = await supabase
-        .from('profiles')
+        .from('new_polzovateli')
         .insert({
           id: profileId,
           auth_user_id: authUserId,
-          first_name: firstName.trim(),
-          last_name: lastName.trim(),
-          phone_number: normalizedPhone,
-          birth_date: birthDate
+          imya: firstName.trim(),
+          familiya: lastName.trim(),
+          nomer_telefona: normalizedPhone
         });
 
       if (profileInsertError) {
@@ -190,7 +189,7 @@ const RegisterPage = () => {
         return;
       }
 
-      // --- Создание 3 банковских счетов (balance = 50 000 ₸) ---
+      // --- Создание 3 банковских счетов в new_scheta (balans = 50 000 ₸) ---
       try {
         const { created } = await ensureStandardAccountsForProfileId(profileId);
         // eslint-disable-next-line no-console
@@ -204,9 +203,9 @@ const RegisterPage = () => {
 
       // --- Проверка: все 3 счёта на месте ---
       const { data: verifyAccounts, error: verifyError } = await supabase
-        .from('accounts')
-        .select('bank_name')
-        .eq('user_id', profileId);
+        .from('new_scheta')
+        .select('nazvanie_banka')
+        .eq('vladilec_id', profileId);
 
       if (verifyError || !verifyAccounts || verifyAccounts.length < 3) {
         // eslint-disable-next-line no-console
@@ -214,6 +213,7 @@ const RegisterPage = () => {
         setError('Ошибка инициализации банковских счетов.');
         return;
       }
+
 
 
       // Автоматический вход после успешного signUp + insert профиля

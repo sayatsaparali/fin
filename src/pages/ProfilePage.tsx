@@ -8,10 +8,9 @@ import { getSupabaseClient } from '../lib/supabaseClient';
 import { STANDARD_BANK_NAMES } from '../lib/standardBanks';
 
 type ProfileData = {
-  first_name: string | null;
-  last_name: string | null;
-  phone_number: string | null;
-  birth_date: string | null;
+  imya: string | null;
+  familiya: string | null;
+  nomer_telefona: string | null;
 };
 
 const TEST_BALANCE_AMOUNT = 50000;
@@ -19,17 +18,6 @@ const TEST_BALANCE_AMOUNT = 50000;
 const getEmailAlias = (email: string | null | undefined) => {
   if (!email) return 'Пользователь FinHub';
   return email.split('@')[0] || 'Пользователь FinHub';
-};
-
-const formatBirthDate = (date: string | null) => {
-  if (!date) return 'Не указана';
-  const parsed = new Date(date);
-  if (Number.isNaN(parsed.getTime())) return date;
-  return new Intl.DateTimeFormat('ru-RU', {
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric'
-  }).format(parsed);
 };
 
 const formatPhoneNumber = (value: string | null) => {
@@ -73,8 +61,8 @@ const ProfilePage = () => {
         const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
 
         const { data, error: profileError } = await supabase
-          .from('profiles')
-          .select('first_name, last_name, phone_number, birth_date')
+          .from('new_polzovateli')
+          .select('imya, familiya, nomer_telefona')
           .eq('id', profileId)
           .maybeSingle();
 
@@ -118,29 +106,15 @@ const ProfilePage = () => {
 
       const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
 
-      // Обновляем баланс всех стандартных счетов до TEST_BALANCE_AMOUNT
       for (const bankName of STANDARD_BANK_NAMES) {
-        // Попытка 1: bank_name
         // eslint-disable-next-line no-await-in-loop
         const { error: updateError } = await supabase
-          .from('accounts')
-          .update({ balance: TEST_BALANCE_AMOUNT })
-          .eq('user_id', profileId)
-          .eq('bank_name', bankName);
+          .from('new_scheta')
+          .update({ balans: TEST_BALANCE_AMOUNT })
+          .eq('vladilec_id', profileId)
+          .eq('nazvanie_banka', bankName);
 
-        if (updateError) {
-          // Попытка 2: bank (fallback column name)
-          // eslint-disable-next-line no-await-in-loop
-          const { error: fallbackError } = await supabase
-            .from('accounts')
-            .update({ balance: TEST_BALANCE_AMOUNT })
-            .eq('user_id', profileId)
-            .eq('bank', bankName);
-
-          if (fallbackError) {
-            throw fallbackError;
-          }
-        }
+        if (updateError) throw updateError;
       }
 
       setGrantSuccess(
@@ -182,12 +156,12 @@ const ProfilePage = () => {
     }
   };
 
-  const firstName = String(profile?.first_name ?? '').trim();
-  const lastName = String(profile?.last_name ?? '').trim();
+  const firstName = String(profile?.imya ?? '').trim();
+  const lastName = String(profile?.familiya ?? '').trim();
   const fullName = `${firstName} ${lastName}`.trim() || firstName || getEmailAlias(user?.email);
   const safeFirstName = firstName || 'Не указано';
   const safeLastName = lastName || 'Не указано';
-  const safePhone = formatPhoneNumber(profile?.phone_number ?? null);
+  const safePhone = formatPhoneNumber(profile?.nomer_telefona ?? null);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
@@ -244,9 +218,9 @@ const ProfilePage = () => {
           </p>
         </article>
         <article className="rounded-xl border border-slate-700/70 bg-slate-900/60 p-3">
-          <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">Дата рождения</p>
+          <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">Email</p>
           <p className="mt-1 text-sm font-medium text-slate-100">
-            {loading ? 'Загрузка...' : formatBirthDate(profile?.birth_date ?? null)}
+            {user?.email ?? 'Не указан'}
           </p>
         </article>
       </section>

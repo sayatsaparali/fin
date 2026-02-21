@@ -133,26 +133,45 @@ const RegisterPage = () => {
         return;
       }
 
+      // --- Диагностика: проверяем что ключи на месте ---
+      const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
+      // eslint-disable-next-line no-console
+      if (!env.VITE_SUPABASE_URL) console.error('URL MISSING');
+      // eslint-disable-next-line no-console
+      if (!env.VITE_SUPABASE_ANON_KEY) console.error('ANON KEY MISSING');
+      // eslint-disable-next-line no-console
+      console.log('Supabase URL:', env.VITE_SUPABASE_URL);
+
       // --- Регистрация через Supabase Auth ---
       // ВАЖНО: options.data сохраняется в auth.users.raw_user_meta_data.
-      // НЕ передаём old-style поля (first_name, last_name, birth_date, phone_number),
-      // чтобы старые триггеры не пытались вставить в удалённую таблицу profiles.
       const normalizedPhone = toKzE164Phone(phoneDigits);
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            imya: firstName.trim(),
-            familiya: lastName.trim(),
-            nomer_telefona: normalizedPhone
+
+      let signUpData;
+      let signUpError;
+      try {
+        const result = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              imya: firstName.trim(),
+              familiya: lastName.trim(),
+              nomer_telefona: normalizedPhone
+            }
           }
-        }
-      });
+        });
+        signUpData = result.data;
+        signUpError = result.error;
+      } catch (networkError) {
+        // eslint-disable-next-line no-console
+        console.error('FULL ERROR:', networkError);
+        setError(`Сетевая ошибка при регистрации: ${networkError instanceof Error ? networkError.message : String(networkError)}`);
+        return;
+      }
 
       if (signUpError) {
         // eslint-disable-next-line no-console
-        console.error('signUp error:');
+        console.error('FULL ERROR:', signUpError);
         // eslint-disable-next-line no-console
         console.dir(signUpError, { depth: null });
         setError(formatSupabaseError('Ошибка регистрации', { message: signUpError.message }));

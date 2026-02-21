@@ -6,7 +6,11 @@ import { useUser } from '../context/UserContext';
 import { ensureStandardAccountsForProfileId } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
 import { generateUniqueDeterministicProfileId } from '../lib/profileIdentity';
-import { getSupabaseClient } from '../lib/supabaseClient';
+import {
+  getSupabaseClient,
+  markSupabaseClientAsFailed,
+  refreshSupabaseClient
+} from '../lib/supabaseClient';
 
 const emailRegex = /\S+@\S+\.\S+/;
 const monthOptions = [
@@ -57,8 +61,142 @@ const formatSupabaseError = (
   title: string,
   error: { message: string; details?: string; hint?: string; code?: string }
 ) =>
-  `${title}: ${error.message}${error.details ? ` | details: ${error.details}` : ''}${error.hint ? ` | hint: ${error.hint}` : ''
+  `${title}: ${error.message}${error.details ? ` | details: ${error.details}` : ''}${
+    error.hint ? ` | hint: ${error.hint}` : ''
   }${error.code ? ` | code: ${error.code}` : ''}`;
+
+const safeJsonStringify = (value: unknown) => {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return JSON.stringify({ fallback: String(value) }, null, 2);
+  }
+};
+
+const serializeUnknownError = (value: unknown) => {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack ?? null,
+      ...(value as unknown as Record<string, unknown>)
+    };
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    return value;
+  }
+
+  return { value: String(value) };
+};
+
+const isLoadFailedLikeError = (value: unknown) => {
+  const serialized = serializeUnknownError(value) as Record<string, unknown>;
+  const message = String(serialized.message ?? '').toLowerCase();
+  const name = String(serialized.name ?? '').toLowerCase();
+  return (
+    message.includes('load failed') ||
+    message.includes('failed to fetch') ||
+    name.includes('typeerror')
+  );
+};
+
+const buildDetailedUiError = (title: string, error: unknown, extra?: Record<string, unknown>) =>
+  `${title}\n${safeJsonStringify({
+    error: serializeUnknownError(error),
+    ...(extra ?? {})
+  })}`;
+
+const runSupabaseNetworkProbe = async (supabaseUrl: string, anonKey: string) => {
+  const endpoints = [`${supabaseUrl}/auth/v1/health`, `${supabaseUrl}/auth/v1/settings`, `${supabaseUrl}/rest/v1/`];
+  const probeResults: Array<Record<string, unknown>> = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          apikey: anonKey,
+          Authorization: `Bearer ${anonKey}`,
+          'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0'
+        }
+      });
+      probeResults.push({
+        endpoint,
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText
+      });
+    } catch (probeError) {
+      probeResults.push({
+        endpoint,
+        ok: false,
+        error: serializeUnknownError(probeError)
+      });
+    }
+  }
+
+  return probeResults;
+};
+
+const tryDirectSignUpFetch = async (params: {
+  supabaseUrl: string;
+  anonKey: string;
+  email: string;
+  password: string;
+  metadata: Record<string, unknown>;
+}) => {
+  const response = await fetch(`${params.supabaseUrl}/auth/v1/signup`, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      apikey: params.anonKey,
+      Authorization: `Bearer ${params.anonKey}`,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0'
+    },
+    body: JSON.stringify({
+      email: params.email,
+      password: params.password,
+      data: params.metadata
+    })
+  });
+
+  const rawText = await response.text();
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : null;
+  } catch {
+    parsed = { rawText };
+  }
+
+  if (!response.ok) {
+    return {
+      data: null,
+      error: {
+        message:
+          String(parsed?.msg ?? parsed?.error_description ?? parsed?.message ?? `HTTP ${response.status}`),
+        code: String(response.status),
+        details: rawText
+      },
+      raw: parsed
+    };
+  }
+
+  return {
+    data: {
+      user: (parsed?.user as { id?: string } | null | undefined) ?? null,
+      session: parsed?.session ?? null
+    },
+    error: null,
+    raw: parsed
+  };
+};
 
 const RegisterPage = () => {
   const { login } = useUser();
@@ -146,8 +284,9 @@ const RegisterPage = () => {
       // ВАЖНО: options.data сохраняется в auth.users.raw_user_meta_data.
       const normalizedPhone = toKzE164Phone(phoneDigits);
 
-      let signUpData;
-      let signUpError;
+      let signUpData: { user?: { id?: string } | null; session?: unknown } | null = null;
+      let signUpError: unknown = null;
+      let signUpThrownError: unknown = null;
       try {
         const result = await supabase.auth.signUp({
           email,
@@ -163,9 +302,89 @@ const RegisterPage = () => {
         signUpData = result.data;
         signUpError = result.error;
       } catch (networkError) {
+        signUpThrownError = networkError;
+      }
+
+      // Если первый экземпляр клиента дал network/load fail, принудительно пересоздаем singleton и пробуем еще раз.
+      if (signUpThrownError) {
+        markSupabaseClientAsFailed();
+        refreshSupabaseClient();
+        const recreatedClient = getSupabaseClient();
+        if (recreatedClient) {
+          try {
+            const retryResult = await recreatedClient.auth.signUp({
+              email,
+              password,
+              options: {
+                data: {
+                  imya: firstName.trim(),
+                  familiya: lastName.trim(),
+                  nomer_telefona: normalizedPhone
+                }
+              }
+            });
+            signUpData = retryResult.data;
+            signUpError = retryResult.error;
+            signUpThrownError = null;
+          } catch (retryError) {
+            signUpThrownError = retryError;
+          }
+        }
+      }
+
+      const shouldRunProbe =
+        isLoadFailedLikeError(signUpThrownError) || isLoadFailedLikeError(signUpError);
+
+      let networkProbe: Array<Record<string, unknown>> | null = null;
+      if (shouldRunProbe && env.VITE_SUPABASE_URL && env.VITE_SUPABASE_ANON_KEY) {
+        networkProbe = await runSupabaseNetworkProbe(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY);
+      }
+
+      // Fallback: прямой fetch в Supabase Auth API, если именно Load failed / Failed to fetch
+      if (
+        shouldRunProbe &&
+        env.VITE_SUPABASE_URL &&
+        env.VITE_SUPABASE_ANON_KEY &&
+        (!signUpData || signUpError || signUpThrownError)
+      ) {
+        try {
+          const directSignUp = await tryDirectSignUpFetch({
+            supabaseUrl: env.VITE_SUPABASE_URL,
+            anonKey: env.VITE_SUPABASE_ANON_KEY,
+            email,
+            password,
+            metadata: {
+              imya: firstName.trim(),
+              familiya: lastName.trim(),
+              nomer_telefona: normalizedPhone
+            }
+          });
+
+          if (!directSignUp.error && directSignUp.data) {
+            signUpData = directSignUp.data;
+            signUpError = null;
+            signUpThrownError = null;
+          } else if (directSignUp.error) {
+            signUpError = directSignUp.error;
+          }
+        } catch (directFetchError) {
+          signUpThrownError = directFetchError;
+        }
+      }
+
+      if (signUpThrownError) {
         // eslint-disable-next-line no-console
-        console.error('FULL ERROR:', networkError);
-        setError(`Сетевая ошибка при регистрации: ${networkError instanceof Error ? networkError.message : String(networkError)}`);
+        console.error('FULL ERROR:', signUpThrownError);
+        setError(
+          buildDetailedUiError('Сетевая ошибка при регистрации (throw)', signUpThrownError, {
+            env: {
+              hasUrl: Boolean(env.VITE_SUPABASE_URL),
+              hasAnonKey: Boolean(env.VITE_SUPABASE_ANON_KEY),
+              urlPreview: env.VITE_SUPABASE_URL ?? '[EMPTY]'
+            },
+            networkProbe
+          })
+        );
         return;
       }
 
@@ -174,7 +393,31 @@ const RegisterPage = () => {
         console.error('FULL ERROR:', signUpError);
         // eslint-disable-next-line no-console
         console.dir(signUpError, { depth: null });
-        setError(formatSupabaseError('Ошибка регистрации', { message: signUpError.message }));
+        const signUpErrorRecord = serializeUnknownError(signUpError) as {
+          message?: string;
+          details?: string;
+          hint?: string;
+          code?: string;
+        };
+        setError(
+          buildDetailedUiError(
+            formatSupabaseError('Ошибка регистрации', {
+              message: String(signUpErrorRecord.message ?? 'Unknown error'),
+              details: signUpErrorRecord.details,
+              hint: signUpErrorRecord.hint,
+              code: signUpErrorRecord.code
+            }),
+            signUpError,
+            {
+              env: {
+                hasUrl: Boolean(env.VITE_SUPABASE_URL),
+                hasAnonKey: Boolean(env.VITE_SUPABASE_ANON_KEY),
+                urlPreview: env.VITE_SUPABASE_URL ?? '[EMPTY]'
+              },
+              networkProbe
+            }
+          )
+        );
         return;
       }
 
@@ -273,7 +516,9 @@ const RegisterPage = () => {
     } catch (unexpectedError) {
       // eslint-disable-next-line no-console
       console.error('Unexpected register flow error:', unexpectedError);
-      setError('Не удалось создать аккаунт. Попробуйте ещё раз.');
+      setError(
+        buildDetailedUiError('Не удалось создать аккаунт. Технический отчет:', unexpectedError)
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -534,7 +779,11 @@ const RegisterPage = () => {
           )}
         </AnimatePresence>
 
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && (
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-[11px] text-red-200">
+            {error}
+          </pre>
+        )}
 
         <div className="flex items-center gap-2 pt-1">
           {step > 1 && (

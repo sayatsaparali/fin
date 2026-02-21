@@ -5,12 +5,7 @@ import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
 import { ensureStandardAccountsForProfileId } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
-import {
-  ensureAuthUserIdLinked,
-  generateUniqueDeterministicProfileId,
-  resolveProfileByAuthUserId
-} from '../lib/profileIdentity';
-import { STANDARD_BANK_NAMES } from '../lib/standardBanks';
+import { generateUniqueDeterministicProfileId } from '../lib/profileIdentity';
 import { getSupabaseClient } from '../lib/supabaseClient';
 
 const emailRegex = /\S+@\S+\.\S+/;
@@ -138,7 +133,7 @@ const RegisterPage = () => {
         return;
       }
 
-      // Регистрация через Supabase Auth с метаданными для FinHub
+      // --- Регистрация через Supabase Auth ---
       const normalizedPhone = toKzE164Phone(phoneDigits);
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email,
@@ -146,7 +141,6 @@ const RegisterPage = () => {
         options: {
           data: {
             appName: 'FinHub',
-            senderName: 'FinHub Support',
             first_name: firstName.trim(),
             last_name: lastName.trim(),
             birth_date: birthDate,
@@ -158,14 +152,7 @@ const RegisterPage = () => {
       if (signUpError) {
         // eslint-disable-next-line no-console
         console.error(signUpError);
-        setError(
-          formatSupabaseError('Ошибка регистрации', {
-            message: signUpError.message,
-            details: signUpError.details ?? undefined,
-            hint: signUpError.hint ?? undefined,
-            code: signUpError.code ?? undefined
-          })
-        );
+        setError(formatSupabaseError('Ошибка регистрации', { message: signUpError.message }));
         return;
       }
 
@@ -175,161 +162,59 @@ const RegisterPage = () => {
         return;
       }
 
-      // Прямая запись профиля сразу после signUp
-      const baseProfilePayload = {
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        phone_number: normalizedPhone,
-        birth_date: birthDate
-      };
+      // --- Создание профиля (TEXT ID: YYMMDD-XXXXXX) ---
+      const profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
 
-      // Шаг 1: Проверяем, создал ли триггер профиль автоматически
-      const existingProfile = await resolveProfileByAuthUserId(supabase, authUserId);
-      let currentUserId: string | null = existingProfile?.id ?? null;
-
-      if (currentUserId) {
-        // Триггер уже создал профиль — обновляем только метаданные, НЕ трогая id
-        const { error: updateError } = await supabase
-          .from('profiles')
-          .update(baseProfilePayload)
-          .eq('id', currentUserId);
-
-        if (updateError) {
-          // eslint-disable-next-line no-console
-          console.error('Supabase profiles update error:', updateError);
-          setError(
-            formatSupabaseError('Ошибка обновления профиля', {
-              message: updateError.message,
-              details: updateError.details ?? undefined,
-              hint: updateError.hint ?? undefined,
-              code: updateError.code ?? undefined
-            })
-          );
-          return;
-        }
-
-        // Гарантируем, что auth_user_id заполнен ПЕРЕД созданием счетов
-        await ensureAuthUserIdLinked(supabase, currentUserId, authUserId);
-      } else {
-        // Шаг 2: Триггер не создал профиль — создаём с клиента
-        const profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
-
-        // Попытка 1: вставка с auth_user_id (если колонка существует)
-        const fullPayload = {
+      const { error: profileInsertError } = await supabase
+        .from('profiles')
+        .insert({
           id: profileId,
           auth_user_id: authUserId,
-          ...baseProfilePayload
-        };
-        const { data: insertedFull, error: insertFullError } = await supabase
-          .from('profiles')
-          .insert(fullPayload)
-          .select('id')
-          .single<{ id: string }>();
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          phone_number: normalizedPhone,
+          birth_date: birthDate
+        });
 
-        if (!insertFullError && insertedFull?.id) {
-          currentUserId = insertedFull.id;
-        } else {
-          const isMissingCol =
-            String(insertFullError?.code ?? '') === '42703' ||
-            String(insertFullError?.message ?? '')
-              .toLowerCase()
-              .includes('auth_user_id');
-
-          if (isMissingCol) {
-            // Попытка 2: вставка без auth_user_id (колонка не существует)
-            // eslint-disable-next-line no-console
-            console.warn(
-              'Колонка auth_user_id не найдена в profiles — вставка без неё. Выполните SQL миграцию deterministic_identity_migration.sql.'
-            );
-            const legacyPayload = {
-              id: profileId,
-              ...baseProfilePayload
-            };
-            const { data: insertedLegacy, error: insertLegacyError } = await supabase
-              .from('profiles')
-              .insert(legacyPayload)
-              .select('id')
-              .single<{ id: string }>();
-
-            if (insertLegacyError) {
-              // eslint-disable-next-line no-console
-              console.error('Supabase profiles insert (legacy) error:', insertLegacyError);
-              setError(
-                formatSupabaseError('Ошибка записи профиля', {
-                  message: insertLegacyError.message,
-                  details: insertLegacyError.details ?? undefined,
-                  hint: insertLegacyError.hint ?? undefined,
-                  code: insertLegacyError.code ?? undefined
-                })
-              );
-              return;
-            }
-            currentUserId = insertedLegacy?.id ?? null;
-          } else {
-            // eslint-disable-next-line no-console
-            console.error('Supabase profiles insert error:', insertFullError);
-            setError(
-              formatSupabaseError('Ошибка записи профиля', {
-                message: insertFullError?.message ?? 'Unknown error',
-                details: insertFullError?.details ?? undefined,
-                hint: insertFullError?.hint ?? undefined,
-                code: insertFullError?.code ?? undefined
-              })
-            );
-            return;
-          }
-        }
-      }
-
-      if (!currentUserId) {
-        setError('Профиль создан без id. Инициализация счетов остановлена.');
-        return;
-      }
-
-      try {
-        await ensureStandardAccountsForProfileId(currentUserId);
-
-        const { data: initializedByBankName, error: initializedByBankNameError } = await supabase
-          .from('accounts')
-          .select('bank_name')
-          .eq('user_id', currentUserId)
-          .in('bank_name', [...STANDARD_BANK_NAMES]);
-
-        if (!initializedByBankNameError) {
-          const initializedNames = new Set(
-            (initializedByBankName ?? []).map((row) => String((row as { bank_name?: string }).bank_name ?? ''))
-          );
-          const hasAllAccounts = STANDARD_BANK_NAMES.every((bankName) => initializedNames.has(bankName));
-          if (!hasAllAccounts) {
-            setError('Ошибка инициализации банковских счетов');
-            return;
-          }
-        } else {
-          const { data: initializedByBank, error: initializedByBankError } = await supabase
-            .from('accounts')
-            .select('bank')
-            .eq('user_id', currentUserId)
-            .in('bank', [...STANDARD_BANK_NAMES]);
-
-          if (initializedByBankError) {
-            throw initializedByBankError;
-          }
-
-          const initializedNames = new Set(
-            (initializedByBank ?? []).map((row) => String((row as { bank?: string }).bank ?? ''))
-          );
-          const hasAllAccounts = STANDARD_BANK_NAMES.every((bankName) => initializedNames.has(bankName));
-          if (!hasAllAccounts) {
-            setError('Ошибка инициализации банковских счетов');
-            return;
-          }
-        }
-      } catch (starterAccountsError) {
+      if (profileInsertError) {
         // eslint-disable-next-line no-console
-        console.error('Supabase eternal accounts error:', starterAccountsError);
-        setError('Ошибка инициализации банковских счетов');
+        console.error('Ошибка создания профиля:', profileInsertError);
+        setError(
+          formatSupabaseError('Ошибка записи профиля', {
+            message: profileInsertError.message,
+            details: profileInsertError.details ?? undefined,
+            hint: profileInsertError.hint ?? undefined,
+            code: profileInsertError.code ?? undefined
+          })
+        );
         return;
       }
+
+      // --- Создание 3 банковских счетов (balance = 50 000 ₸) ---
+      try {
+        const { created } = await ensureStandardAccountsForProfileId(profileId);
+        // eslint-disable-next-line no-console
+        console.log(`Создано ${created} банковских счетов для профиля ${profileId}`);
+      } catch (accountsError) {
+        // eslint-disable-next-line no-console
+        console.error('Ошибка создания счетов:', accountsError);
+        setError('Профиль создан, но не удалось создать банковские счета.');
+        return;
+      }
+
+      // --- Проверка: все 3 счёта на месте ---
+      const { data: verifyAccounts, error: verifyError } = await supabase
+        .from('accounts')
+        .select('bank_name')
+        .eq('user_id', profileId);
+
+      if (verifyError || !verifyAccounts || verifyAccounts.length < 3) {
+        // eslint-disable-next-line no-console
+        console.error('Верификация счетов не пройдена:', verifyError, verifyAccounts);
+        setError('Ошибка инициализации банковских счетов.');
+        return;
+      }
+
 
       // Автоматический вход после успешного signUp + insert профиля
       let hasSession = Boolean(signUpData.session);

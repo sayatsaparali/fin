@@ -3,9 +3,6 @@ import { normalizeToStandardBankName, type StandardBankName } from './standardBa
 
 export const PROFILE_ID_REGEX = /^\d{6}-\d{6}$/;
 
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 const BANK_CODE_BY_NAME: Record<StandardBankName, string> = {
   'Kaspi Bank': 'KASPI',
   'Halyk Bank': 'HALYK',
@@ -13,12 +10,6 @@ const BANK_CODE_BY_NAME: Record<StandardBankName, string> = {
 };
 
 const toTwoDigits = (value: number) => String(value).padStart(2, '0');
-
-const isMissingColumnError = (error: unknown, columnName: string) => {
-  const code = String((error as { code?: string } | null)?.code ?? '');
-  const message = String((error as { message?: string } | null)?.message ?? '').toLowerCase();
-  return code === '42703' || message.includes(`column "${columnName.toLowerCase()}"`);
-};
 
 const randomInt = (maxExclusive: number) => {
   if (maxExclusive <= 0) return 0;
@@ -90,42 +81,29 @@ export const extractProfileIdFromAccountId = (accountId: string | null | undefin
 
 export type ResolvedProfileIdentity = {
   id: string;
-  authUserId: string | null;
+  authUserId: string;
 };
 
+/**
+ * Ищет профиль по auth_user_id (TEXT колонка в profiles).
+ */
 export const resolveProfileByAuthUserId = async (
   supabase: SupabaseClient,
   authUserId: string
 ): Promise<ResolvedProfileIdentity | null> => {
-  const { data: byAuthUserId, error: byAuthUserIdError } = await supabase
+  const { data, error } = await supabase
     .from('profiles')
     .select('id, auth_user_id')
     .eq('auth_user_id', authUserId)
     .maybeSingle();
 
-  if (!byAuthUserIdError && byAuthUserId) {
+  if (error) throw error;
+
+  if (data?.id) {
     return {
-      id: String((byAuthUserId as { id?: string }).id ?? ''),
-      authUserId: String((byAuthUserId as { auth_user_id?: string | null }).auth_user_id ?? authUserId)
+      id: String(data.id),
+      authUserId: String((data as { auth_user_id?: string }).auth_user_id ?? authUserId)
     };
-  }
-
-  if (byAuthUserIdError && !isMissingColumnError(byAuthUserIdError, 'auth_user_id')) {
-    throw byAuthUserIdError;
-  }
-
-  const { data: byLegacyId, error: byLegacyIdError } = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('id', authUserId)
-    .maybeSingle();
-
-  if (byLegacyIdError) {
-    throw byLegacyIdError;
-  }
-
-  if (byLegacyId?.id) {
-    return { id: String(byLegacyId.id), authUserId };
   }
 
   return null;
@@ -133,25 +111,17 @@ export const resolveProfileByAuthUserId = async (
 
 /**
  * Гарантирует, что auth_user_id заполнен в профиле.
- * Если колонка пуста — записывает authUserId.
- * Если колонка не существует — пропускает без ошибки.
  */
 export const ensureAuthUserIdLinked = async (
   supabase: SupabaseClient,
   profileId: string,
   authUserId: string
 ): Promise<void> => {
-  // Сначала проверяем текущее значение
   const { data: profile, error: selectError } = await supabase
     .from('profiles')
     .select('auth_user_id')
     .eq('id', profileId)
     .maybeSingle();
-
-  // Колонка не существует — пропускаем
-  if (selectError && isMissingColumnError(selectError, 'auth_user_id')) {
-    return;
-  }
 
   if (selectError) {
     // eslint-disable-next-line no-console
@@ -160,21 +130,16 @@ export const ensureAuthUserIdLinked = async (
   }
 
   const currentValue = (profile as { auth_user_id?: string | null } | null)?.auth_user_id;
+  if (currentValue === authUserId) return;
 
-  // Уже заполнено правильным значением
-  if (currentValue === authUserId) {
-    return;
-  }
-
-  // Пусто или другое значение — обновляем
   const { error: updateError } = await supabase
     .from('profiles')
     .update({ auth_user_id: authUserId })
     .eq('id', profileId);
 
-  if (updateError && !isMissingColumnError(updateError, 'auth_user_id')) {
+  if (updateError) {
     // eslint-disable-next-line no-console
-    console.error('ensureAuthUserIdLinked: ошибка обновления auth_user_id', updateError);
+    console.error('ensureAuthUserIdLinked: ошибка обновления', updateError);
   }
 };
 
@@ -187,9 +152,7 @@ export const resolveRequiredProfileIdByAuthUserId = async (
     throw new Error('Профиль пользователя не найден.');
   }
 
-  // Авто-ремонт: если профиль найден, но auth_user_id мог быть пустым
   await ensureAuthUserIdLinked(supabase, resolved.id, authUserId);
-
   return resolved.id;
 };
 
@@ -206,14 +169,11 @@ export const findProfileByAccountId = async (
     .eq('id', profileId)
     .maybeSingle();
 
-  if (error) {
-    throw error;
-  }
-
+  if (error) throw error;
   if (!data?.id) return null;
 
   return {
-    id: String((data as { id?: string }).id ?? ''),
+    id: String(data.id),
     authUserId: String((data as { auth_user_id?: string | null }).auth_user_id ?? '')
   };
 };
@@ -230,21 +190,14 @@ export const generateUniqueDeterministicProfileId = async (
     if (tried.has(candidate)) continue;
     tried.add(candidate);
 
+    // eslint-disable-next-line no-await-in-loop
     const { data: existing, error: existingError } = await supabase
       .from('profiles')
       .select('id')
       .eq('id', candidate)
       .maybeSingle();
 
-    if (existingError) {
-      const code = String((existingError as { code?: string } | null)?.code ?? '');
-      if (code === '22P02') {
-        throw new Error(
-          'Колонка profiles.id имеет тип uuid. Для архитектуры ИИН переведите profiles.id в text через SQL миграцию.'
-        );
-      }
-      throw existingError;
-    }
+    if (existingError) throw existingError;
 
     if (!existing?.id) {
       return candidate;
@@ -253,6 +206,3 @@ export const generateUniqueDeterministicProfileId = async (
 
   throw new Error('Не удалось сгенерировать уникальный ID профиля.');
 };
-
-export const isUuidLike = (value: string | null | undefined) =>
-  UUID_REGEX.test(String(value ?? '').trim());

@@ -134,24 +134,27 @@ const RegisterPage = () => {
       }
 
       // --- Регистрация через Supabase Auth ---
+      // ВАЖНО: options.data сохраняется в auth.users.raw_user_meta_data.
+      // НЕ передаём old-style поля (first_name, last_name, birth_date, phone_number),
+      // чтобы старые триггеры не пытались вставить в удалённую таблицу profiles.
       const normalizedPhone = toKzE164Phone(phoneDigits);
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
-            appName: 'FinHub',
-            first_name: firstName.trim(),
-            last_name: lastName.trim(),
-            birth_date: birthDate,
-            phone_number: normalizedPhone
+            imya: firstName.trim(),
+            familiya: lastName.trim(),
+            nomer_telefona: normalizedPhone
           }
         }
       });
 
       if (signUpError) {
         // eslint-disable-next-line no-console
-        console.error(signUpError);
+        console.error('signUp error:');
+        // eslint-disable-next-line no-console
+        console.dir(signUpError, { depth: null });
         setError(formatSupabaseError('Ошибка регистрации', { message: signUpError.message }));
         return;
       }
@@ -226,13 +229,14 @@ const RegisterPage = () => {
 
         if (signInError) {
           // eslint-disable-next-line no-console
-          console.error(signInError);
+          console.dir(signInError, { depth: null });
+          const errAny = signInError as unknown as Record<string, string | undefined>;
           setError(
             formatSupabaseError('Профиль создан, но вход не выполнен', {
               message: signInError.message,
-              details: signInError.details ?? undefined,
-              hint: signInError.hint ?? undefined,
-              code: signInError.code ?? undefined
+              details: errAny.details,
+              hint: errAny.hint,
+              code: errAny.code
             })
           );
           return;

@@ -122,7 +122,13 @@ const TransactionsPage = () => {
         setTransactions(data);
       } catch (e) {
         if (!isMounted) return;
-        setError('Не удалось загрузить историю. Проверьте IIN и поле new_tranzakcii.vladilec_id.');
+        const errorMessage =
+          e instanceof Error ? e.message : String((e as { message?: string } | null)?.message ?? '');
+        setError(
+          errorMessage
+            ? `Не удалось загрузить историю: ${errorMessage}`
+            : 'Не удалось загрузить историю. Проверьте IIN и поле new_tranzakcii.vladilec_id.'
+        );
         // eslint-disable-next-line no-console
         console.error(e);
       } finally {

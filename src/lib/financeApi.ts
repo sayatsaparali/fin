@@ -1,5 +1,4 @@
 import { getSupabaseClient, isSchemaRelatedError } from './supabaseClient';
-import { resolveRequiredProfileIdByAuthUserId } from './profileIdentity';
 
 export type DailyAnalyticsPoint = {
   name: string;
@@ -73,23 +72,35 @@ const resolveCurrentUserIdentity = async (
   supabase: NonNullable<ReturnType<typeof getSupabaseClient>>,
   authUserId: string
 ): Promise<ResolvedUserIdentity> => {
-  const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUserId);
+  const parseProfileByAuthUser = async (selectClause: string) =>
+    supabase
+      .from('new_polzovateli')
+      .select(selectClause)
+      .eq('auth_user_id', authUserId)
+      .maybeSingle();
 
-  const parseProfileSelect = async (selectClause: string) =>
-    supabase.from('new_polzovateli').select(selectClause).eq('id', profileId).maybeSingle();
+  let { data: profileData, error: profileError } = await parseProfileByAuthUser('id, iin, auth_user_id');
 
-  let { data: profileData, error: profileError } = await parseProfileSelect('id, iin');
-
+  // Fallback для старых схем, где auth_user_id отсутствует или профиль хранится иначе.
   if (profileError && isSchemaRelatedError(profileError)) {
-    const fallbackResult = await parseProfileSelect('id');
-    profileData = fallbackResult.data;
-    profileError = fallbackResult.error;
+    const fallbackById = await supabase
+      .from('new_polzovateli')
+      .select('id, iin')
+      .eq('id', authUserId)
+      .maybeSingle();
+    profileData = fallbackById.data;
+    profileError = fallbackById.error;
   }
 
   if (profileError) throw profileError;
 
   const profileRecord = profileData as { id?: string | null; iin?: string | null } | null;
-  const iin = asTextOrNull(profileRecord?.iin) ?? asTextOrNull(profileRecord?.id) ?? profileId;
+  const profileId = asTextOrNull(profileRecord?.id);
+  const iin = asTextOrNull(profileRecord?.iin) ?? profileId;
+
+  if (!profileId || !iin) {
+    throw new Error('В new_polzovateli не найден профиль для текущего auth.user.id.');
+  }
 
   return { profileId, iin };
 };

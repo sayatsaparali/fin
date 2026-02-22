@@ -5,7 +5,7 @@ import AuthLayout from '../layouts/AuthLayout';
 import { useUser } from '../context/UserContext';
 import { ensureStandardAccountsForProfileId } from '../lib/accountsInitializer';
 import { extractKzPhoneDigits, formatKzPhoneFromDigits, toKzE164Phone } from '../lib/phone';
-import { generateUniqueDeterministicProfileId } from '../lib/profileIdentity';
+import { generateUniqueDeterministicProfileId, resolveProfileByAuthUserId } from '../lib/profileIdentity';
 import {
   getSupabaseClient,
   markSupabaseClientAsFailed,
@@ -283,6 +283,17 @@ const RegisterPage = () => {
       // --- Регистрация через Supabase Auth ---
       // ВАЖНО: options.data сохраняется в auth.users.raw_user_meta_data.
       const normalizedPhone = toKzE164Phone(phoneDigits);
+      const signUpMetadata = {
+        // legacy keys used by some existing triggers/functions
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        birth_date: birthDate,
+        phone_number: normalizedPhone,
+        // current app keys
+        imya: firstName.trim(),
+        familiya: lastName.trim(),
+        nomer_telefona: normalizedPhone
+      };
 
       let signUpData: { user?: { id?: string } | null; session?: unknown } | null = null;
       let signUpError: unknown = null;
@@ -293,9 +304,7 @@ const RegisterPage = () => {
           password,
           options: {
             data: {
-              imya: firstName.trim(),
-              familiya: lastName.trim(),
-              nomer_telefona: normalizedPhone
+              ...signUpMetadata
             }
           }
         });
@@ -317,9 +326,7 @@ const RegisterPage = () => {
               password,
               options: {
                 data: {
-                  imya: firstName.trim(),
-                  familiya: lastName.trim(),
-                  nomer_telefona: normalizedPhone
+                  ...signUpMetadata
                 }
               }
             });
@@ -354,9 +361,7 @@ const RegisterPage = () => {
             email,
             password,
             metadata: {
-              imya: firstName.trim(),
-              familiya: lastName.trim(),
-              nomer_telefona: normalizedPhone
+              ...signUpMetadata
             }
           });
 
@@ -427,42 +432,71 @@ const RegisterPage = () => {
         return;
       }
 
-      // --- Создание профиля в new_polzovateli (TEXT ID: YYMMDD-XXXXXX) ---
-      const profileId = await generateUniqueDeterministicProfileId(supabase, birthDate);
+      // --- Создание/обновление профиля в new_polzovateli (TEXT ID: YYMMDD-XXXXXX) ---
+      const existingProfile = await resolveProfileByAuthUserId(supabase, authUserId);
+      const profileId =
+        existingProfile?.id ?? (await generateUniqueDeterministicProfileId(supabase, birthDate));
+      const profilePayload = {
+        id: profileId,
+        auth_user_id: authUserId,
+        imya: firstName.trim(),
+        familiya: lastName.trim(),
+        nomer_telefona: normalizedPhone
+      };
 
-      const { error: profileInsertError } = await supabase
+      const primaryProfileWrite = await supabase
         .from('new_polzovateli')
-        .insert({
-          id: profileId,
-          auth_user_id: authUserId,
-          imya: firstName.trim(),
-          familiya: lastName.trim(),
-          nomer_telefona: normalizedPhone
-        });
+        .upsert(profilePayload, { onConflict: 'auth_user_id' })
+        .select('id')
+        .single<{ id: string }>();
 
-      if (profileInsertError) {
+      const needsProfileFallback =
+        primaryProfileWrite.error &&
+        (String(primaryProfileWrite.error.code ?? '') === '42P10' ||
+          String(primaryProfileWrite.error.code ?? '') === '23505');
+
+      const fallbackProfileWrite = needsProfileFallback
+        ? await supabase
+            .from('new_polzovateli')
+            .upsert(profilePayload, { onConflict: 'id' })
+            .select('id')
+            .single<{ id: string }>()
+        : null;
+
+      const finalProfileId = fallbackProfileWrite?.data?.id ?? primaryProfileWrite.data?.id ?? profileId;
+      const profileWriteError = fallbackProfileWrite?.error ?? primaryProfileWrite.error;
+
+      if (profileWriteError || !finalProfileId) {
         // eslint-disable-next-line no-console
-        console.error('Ошибка создания профиля:', profileInsertError);
+        console.error('Ошибка создания профиля:', profileWriteError);
         setError(
-          formatSupabaseError('Ошибка записи профиля', {
-            message: profileInsertError.message,
-            details: profileInsertError.details ?? undefined,
-            hint: profileInsertError.hint ?? undefined,
-            code: profileInsertError.code ?? undefined
-          })
+          buildDetailedUiError(
+            formatSupabaseError('Ошибка записи профиля', {
+              message: String(profileWriteError?.message ?? 'unknown'),
+              details: profileWriteError?.details ?? undefined,
+              hint: profileWriteError?.hint ?? undefined,
+              code: profileWriteError?.code ?? undefined
+            }),
+            profileWriteError ?? { message: 'No profile id returned' }
+          )
         );
         return;
       }
 
       // --- Создание 3 банковских счетов в new_scheta (balans = 50 000 ₸) ---
       try {
-        const { created } = await ensureStandardAccountsForProfileId(profileId);
+        const { created } = await ensureStandardAccountsForProfileId(finalProfileId);
         // eslint-disable-next-line no-console
-        console.log(`Создано ${created} банковских счетов для профиля ${profileId}`);
+        console.log(`Создано ${created} банковских счетов для профиля ${finalProfileId}`);
       } catch (accountsError) {
         // eslint-disable-next-line no-console
         console.error('Ошибка создания счетов:', accountsError);
-        setError('Профиль создан, но не удалось создать банковские счета.');
+        setError(
+          buildDetailedUiError(
+            'Профиль создан, но не удалось создать банковские счета.',
+            accountsError
+          )
+        );
         return;
       }
 
@@ -470,12 +504,17 @@ const RegisterPage = () => {
       const { data: verifyAccounts, error: verifyError } = await supabase
         .from('new_scheta')
         .select('nazvanie_banka')
-        .eq('vladilec_id', profileId);
+        .eq('vladilec_id', finalProfileId);
 
       if (verifyError || !verifyAccounts || verifyAccounts.length < 3) {
         // eslint-disable-next-line no-console
         console.error('Верификация счетов не пройдена:', verifyError, verifyAccounts);
-        setError('Ошибка инициализации банковских счетов.');
+        setError(
+          buildDetailedUiError(
+            'Ошибка инициализации банковских счетов.',
+            verifyError ?? { verifyAccountsCount: verifyAccounts?.length ?? 0 }
+          )
+        );
         return;
       }
 

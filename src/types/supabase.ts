@@ -5,7 +5,7 @@
 // ── new_polzovateli ──────────────────────────────────────────
 export interface NewPolzovateli {
     id: string;                    // TEXT, формат YYMMDD-XXXXXX
-    auth_user_id: string;          // UUID из auth.users → TEXT
+    auth_user_id: string;          // UUID из auth.users
     imya: string | null;           // Имя
     familiya: string | null;       // Фамилия
     nomer_telefona: string | null; // Телефон в формате +7XXXXXXXXXX

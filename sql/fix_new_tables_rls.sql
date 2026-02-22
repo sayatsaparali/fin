@@ -23,6 +23,33 @@ DROP FUNCTION IF EXISTS public.on_auth_user_created() CASCADE;
 -- ЧАСТЬ 2: RLS-политики для new_polzovateli
 -- ============================================================
 
+-- Приводим auth_user_id к uuid, чтобы совпадал с auth.uid() и не было uuid=text ошибок.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'new_polzovateli'
+      AND column_name = 'auth_user_id'
+      AND data_type = 'text'
+  ) THEN
+    ALTER TABLE new_polzovateli
+      ALTER COLUMN auth_user_id DROP NOT NULL;
+
+    ALTER TABLE new_polzovateli
+      ALTER COLUMN auth_user_id TYPE uuid
+      USING (
+        CASE
+          WHEN auth_user_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+            THEN auth_user_id::uuid
+          ELSE NULL
+        END
+      );
+  END IF;
+END
+$$;
+
 ALTER TABLE new_polzovateli ENABLE ROW LEVEL SECURITY;
 
 -- Удаляем старые политики (если были)
@@ -37,7 +64,7 @@ DROP POLICY IF EXISTS "Allow all update" ON new_polzovateli;
 -- Чтение: аутентифицированный пользователь видит только свой профиль
 CREATE POLICY "Users can read own profile"
   ON new_polzovateli FOR SELECT
-  USING (auth_user_id = auth.uid()::text);
+  USING (auth_user_id = auth.uid());
 
 -- Вставка: разрешаем для anon и authenticated (нужно при регистрации,
 -- т.к. signUp возвращает сессию, но RLS проверяет до login)
@@ -48,8 +75,8 @@ CREATE POLICY "Allow insert for registration"
 -- Обновление: только свой профиль
 CREATE POLICY "Users can update own profile"
   ON new_polzovateli FOR UPDATE
-  USING (auth_user_id = auth.uid()::text)
-  WITH CHECK (auth_user_id = auth.uid()::text);
+  USING (auth_user_id = auth.uid())
+  WITH CHECK (auth_user_id = auth.uid());
 
 
 -- ============================================================
@@ -73,7 +100,7 @@ CREATE POLICY "Allow read via profile"
   ON new_scheta FOR SELECT
   USING (
     vladilec_id IN (
-      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()::text
+      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()
     )
   );
 
@@ -87,12 +114,12 @@ CREATE POLICY "Allow update via profile"
   ON new_scheta FOR UPDATE
   USING (
     vladilec_id IN (
-      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()::text
+      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()
     )
   )
   WITH CHECK (
     vladilec_id IN (
-      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()::text
+      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()
     )
   );
 
@@ -115,7 +142,7 @@ CREATE POLICY "Allow read via profile"
   ON new_tranzakcii FOR SELECT
   USING (
     user_id IN (
-      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()::text
+      SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()
     )
   );
 

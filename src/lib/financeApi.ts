@@ -295,8 +295,9 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
   if (txError) throw txError;
 
-  // Привязка к владельцу счетов: используем vladilec_id = profile.id
-  // для вычисления остатка после операции, если balance_after не хранится в записи.
+  // Привязка к владельцу счетов по profile.id (для таблицы new_scheta),
+  // а транзакции фильтруются по vladilec_id = IIN.
+  // Здесь считаем остаток после операции, если balance_after не хранится в записи.
   const { data: accountsData, error: accountsError } = await supabase
     .from('new_scheta')
     .select('nazvanie_banka, balans')

@@ -112,6 +112,12 @@ create policy "new_scheta_select_own"
     )
   );
 
+drop policy if exists "new_scheta_select_recipient_lookup" on public.new_scheta;
+create policy "new_scheta_select_recipient_lookup"
+  on public.new_scheta for select
+  to authenticated
+  using (true);
+
 drop policy if exists "new_scheta_insert_registration" on public.new_scheta;
 create policy "new_scheta_insert_registration"
   on public.new_scheta for insert

@@ -93,6 +93,7 @@ DROP POLICY IF EXISTS "Allow all insert" ON new_scheta;
 DROP POLICY IF EXISTS "Allow all update" ON new_scheta;
 DROP POLICY IF EXISTS "Allow insert for registration" ON new_scheta;
 DROP POLICY IF EXISTS "Allow read via profile" ON new_scheta;
+DROP POLICY IF EXISTS "Allow transfer recipient lookup" ON new_scheta;
 DROP POLICY IF EXISTS "Allow update via profile" ON new_scheta;
 
 -- Чтение: владелец счета (через new_polzovateli.auth_user_id)
@@ -103,6 +104,13 @@ CREATE POLICY "Allow read via profile"
       SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()
     )
   );
+
+-- Поиск получателя при переводе по номеру телефона:
+-- отправителю нужно видеть существование счета и название банка у получателя.
+CREATE POLICY "Allow transfer recipient lookup"
+  ON new_scheta FOR SELECT
+  TO authenticated
+  USING (true);
 
 -- Вставка: разрешаем всем (при регистрации счета создаются сразу)
 CREATE POLICY "Allow insert for registration"

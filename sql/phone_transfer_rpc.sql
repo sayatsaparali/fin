@@ -1,4 +1,32 @@
--- FinHub: atomic phone transfer between users
+-- FinHub: atomic phone transfer between users (new tables)
+-- Commission flow:
+-- sender debited by (amount + commission)
+-- recipient credited by amount
+-- commission credited to system account finhub_system
+
+-- Ensure technical system user exists.
+insert into public.new_polzovateli (id, auth_user_id, imya, familiya, nomer_telefona)
+values (
+  'finhub_system',
+  '00000000-0000-0000-0000-000000000001'::uuid,
+  'FinHub',
+  'System',
+  null
+)
+on conflict (id) do update
+set
+  auth_user_id = coalesce(public.new_polzovateli.auth_user_id, excluded.auth_user_id),
+  imya = coalesce(public.new_polzovateli.imya, excluded.imya),
+  familiya = coalesce(public.new_polzovateli.familiya, excluded.familiya);
+
+-- Ensure technical commission account exists.
+insert into public.new_scheta (id, vladilec_id, nazvanie_banka, balans)
+values ('finhub_system-FEE', 'finhub_system', 'FinHub System', 0)
+on conflict (id) do update
+set
+  vladilec_id = excluded.vladilec_id,
+  nazvanie_banka = excluded.nazvanie_banka;
+
 create or replace function public.execute_phone_transfer(
   p_sender_user_id text,
   p_sender_account_id text,
@@ -18,7 +46,22 @@ declare
   v_sender_balance numeric;
   v_sender_bank text;
   v_recipient_bank text;
+  v_total_debit numeric;
+  v_system_account_id constant text := 'finhub_system-FEE';
+  v_system_user_id constant text := 'finhub_system';
 begin
+  if p_sender_user_id is null or p_recipient_user_id is null then
+    raise exception 'Sender/recipient user id is required';
+  end if;
+
+  if p_sender_account_id is null or p_recipient_account_id is null then
+    raise exception 'Sender/recipient account id is required';
+  end if;
+
+  if p_sender_user_id = p_recipient_user_id then
+    raise exception 'Self transfer is not allowed';
+  end if;
+
   if p_amount is null or p_amount <= 0 then
     raise exception 'Amount must be positive';
   end if;
@@ -27,153 +70,145 @@ begin
     raise exception 'Commission must be >= 0';
   end if;
 
-  select
-    balance,
-    coalesce(
-      nullif((to_jsonb(accounts) ->> 'bank_name')::text, ''),
-      nullif((to_jsonb(accounts) ->> 'bank')::text, ''),
-      'Bank'
-    )
+  v_total_debit := p_amount + p_commission;
+
+  -- Self-healing: if system account was removed, recreate it.
+  insert into public.new_scheta (id, vladilec_id, nazvanie_banka, balans)
+  values (v_system_account_id, v_system_user_id, 'FinHub System', 0)
+  on conflict (id) do update
+  set
+    vladilec_id = excluded.vladilec_id,
+    nazvanie_banka = excluded.nazvanie_banka;
+
+  select balans, nazvanie_banka
   into v_sender_balance, v_sender_bank
-  from accounts
+  from public.new_scheta
   where id = p_sender_account_id
-    and user_id = p_sender_user_id
+    and vladilec_id = p_sender_user_id
   for update;
 
   if not found then
     raise exception 'Sender account not found';
   end if;
 
-  select
-    coalesce(
-      nullif((to_jsonb(accounts) ->> 'bank_name')::text, ''),
-      nullif((to_jsonb(accounts) ->> 'bank')::text, ''),
-      'Bank'
-    )
+  select nazvanie_banka
   into v_recipient_bank
-  from accounts
+  from public.new_scheta
   where id = p_recipient_account_id
-    and user_id = p_recipient_user_id
+    and vladilec_id = p_recipient_user_id
   for update;
 
   if not found then
     raise exception 'Recipient account not found';
   end if;
 
-  if v_sender_balance < (p_amount + p_commission) then
+  perform 1
+  from public.new_scheta
+  where id = v_system_account_id
+    and vladilec_id = v_system_user_id
+  for update;
+
+  if not found then
+    raise exception 'System commission account not found';
+  end if;
+
+  if v_sender_balance < v_total_debit then
     raise exception 'Insufficient funds';
   end if;
 
-  update accounts
-  set balance = balance - (p_amount + p_commission)
+  -- 1) sender: amount + commission
+  update public.new_scheta
+  set balans = balans - v_total_debit
   where id = p_sender_account_id
-    and user_id = p_sender_user_id;
+    and vladilec_id = p_sender_user_id;
 
-  update accounts
-  set balance = balance + p_amount
+  -- 2) recipient: full transfer amount
+  update public.new_scheta
+  set balans = balans + p_amount
   where id = p_recipient_account_id
-    and user_id = p_recipient_user_id;
+    and vladilec_id = p_recipient_user_id;
 
-  begin
-    insert into transactions (user_id, amount, description, category, counterparty, commission, bank, type, date)
-    values
-      (
-        p_sender_user_id,
-        -(p_amount + p_commission),
-        'Перевод по номеру телефона',
-        'Переводы',
-        coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
-        p_commission,
-        v_sender_bank,
-        'expense',
-        now()
-      ),
-      (
-        p_recipient_user_id,
-        p_amount,
-        coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
-        'Переводы',
-        coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
-        0,
-        v_recipient_bank,
-        'income',
-        now()
-      );
-  exception
-    when undefined_column then
-      begin
-        insert into transactions (user_id, amount, description, category, counterparty, commission, type, date)
-        values
-          (
-            p_sender_user_id,
-            -(p_amount + p_commission),
-            'Перевод по номеру телефона',
-            'Переводы',
-            coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
-            p_commission,
-            'expense',
-            now()
-          ),
-          (
-            p_recipient_user_id,
-            p_amount,
-            coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
-            'Переводы',
-            coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
-            0,
-            'income',
-            now()
-          );
-      exception
-        when undefined_column then
-          begin
-        insert into transactions (user_id, amount, type, description, counterparty, commission, occurred_at, bank)
-        values
-          (
-            p_sender_user_id,
-            -(p_amount + p_commission),
-            'expense',
-            'Перевод по номеру телефона',
-            coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
-            p_commission,
-            now(),
-            v_sender_bank
-          ),
-          (
-            p_recipient_user_id,
-            p_amount,
-            'income',
-            coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
-            coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
-            0,
-              now(),
-              v_recipient_bank
-            );
-          exception
-            when undefined_column then
-              insert into transactions (user_id, amount, type, description, counterparty, occurred_at, bank)
-              values
-                (
-                  p_sender_user_id,
-                  -(p_amount + p_commission),
-                  'expense',
-                  'Перевод по номеру телефона',
-                  coalesce(p_sender_counterparty, 'Перевод по номеру телефона'),
-                  now(),
-                  v_sender_bank
-                ),
-                (
-                  p_recipient_user_id,
-                  p_amount,
-                  'income',
-                  coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
-                  coalesce(p_recipient_counterparty, 'Перевод от пользователя FinHub'),
-                  now(),
-                  v_recipient_bank
-                );
-          end;
-      end;
-  end;
+  -- 3) FinHub system account: commission amount
+  if p_commission > 0 then
+    update public.new_scheta
+    set balans = balans + p_commission
+    where id = v_system_account_id
+      and vladilec_id = v_system_user_id;
+  end if;
+
+  -- Sender transaction
+  insert into public.new_tranzakcii (
+    user_id,
+    amount,
+    description,
+    category,
+    counterparty,
+    commission,
+    bank,
+    type,
+    date
+  )
+  values (
+    p_sender_user_id,
+    -v_total_debit,
+    'Перевод по номеру телефона',
+    'Переводы',
+    coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
+    p_commission,
+    coalesce(v_sender_bank, 'Bank'),
+    'expense',
+    now()
+  );
+
+  -- Recipient transaction
+  insert into public.new_tranzakcii (
+    user_id,
+    amount,
+    description,
+    category,
+    counterparty,
+    commission,
+    bank,
+    type,
+    date
+  )
+  values (
+    p_recipient_user_id,
+    p_amount,
+    coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
+    'Переводы',
+    coalesce(nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
+    0,
+    coalesce(v_recipient_bank, 'Bank'),
+    'income',
+    now()
+  );
+
+  -- System commission transaction (for audit)
+  if p_commission > 0 then
+    insert into public.new_tranzakcii (
+      user_id,
+      amount,
+      description,
+      category,
+      counterparty,
+      commission,
+      bank,
+      type,
+      date
+    )
+    values (
+      v_system_user_id,
+      p_commission,
+      'Комиссия за перевод',
+      'Комиссии',
+      coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод FinHub'),
+      0,
+      'FinHub System',
+      'income',
+      now()
+    );
+  end if;
 end;
 $$;
 

@@ -59,6 +59,9 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 0
   }).format(value);
 
+const formatTengePlain = (value: number) =>
+  `${new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 2 }).format(value)} Т`;
+
 const formatCardValue = (input: string) =>
   input
     .replace(/\D/g, '')
@@ -1189,15 +1192,15 @@ const PaymentsPage = () => {
                 <input
                   id="amount"
                   type="number"
-                  min={1}
-                  step={100}
+                  min={0}
+                  step="any"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => setAmount(e.target.value.replace(',', '.'))}
                   placeholder="5000"
                   className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                 />
                 <p className="text-xs text-slate-400">{commissionText}</p>
-                <p className="text-xs text-slate-500">К списанию: {formatCurrency(totalDebit).replace('KZT', '₸')}</p>
+                <p className="text-xs text-slate-500">К списанию: {formatTengePlain(totalDebit)}</p>
               </div>
 
               <div className="rounded-xl border border-slate-700/70 bg-slate-900/60 p-3 text-xs text-slate-300">

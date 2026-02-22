@@ -785,15 +785,16 @@ const PaymentsPage = () => {
           return;
         }
 
+        const senderBankName =
+          normalizeToStandardBankName(sourceAccount.bank) ?? sourceAccount.bank;
+
         const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
-          p_sender_user_id: profileUserId,
-          p_sender_account_id: sourceAccount.id,
-          p_recipient_user_id: recipientUserId,
-          p_recipient_account_id: recipientAccountForPhone?.id,
+          p_sender_iin: profileUserId,
+          p_recipient_iin: recipientUserId,
           p_amount: amountValue,
-          p_commission: commission,
-          p_sender_counterparty: recipientName ?? 'Перевод по номеру телефона',
-          p_recipient_counterparty: sourceAccount.bank
+          p_fee: commission,
+          p_sender_bank: senderBankName,
+          p_recipient_bank: selectedRecipientBankName
         });
 
         if (transferRpcError) throw transferRpcError;

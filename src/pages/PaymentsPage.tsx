@@ -204,7 +204,8 @@ const PaymentsPage = () => {
   const [newFavoriteAvatar, setNewFavoriteAvatar] = useState('');
   const phoneInputRef = useRef<HTMLInputElement | null>(null);
 
-  const amountValue = Number(amount || 0);
+  const parsedAmount = Number.parseFloat(amount);
+  const amountValue = Number.isFinite(parsedAmount) ? parsedAmount : 0;
 
   const keepPhoneCaretAfterPrefix = () => {
     requestAnimationFrame(() => {

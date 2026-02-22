@@ -59,8 +59,14 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 0
   }).format(value);
 
+const normalizeMoneyValue = (value: number) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 0;
+  return Math.max(0, Math.round(numericValue));
+};
+
 const formatTengePlain = (value: number) =>
-  `${new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 2 }).format(value)} Т`;
+  `${new Intl.NumberFormat('ru-KZ', { maximumFractionDigits: 0 }).format(normalizeMoneyValue(value))} Т`;
 
 const formatCardValue = (input: string) =>
   input
@@ -206,6 +212,7 @@ const PaymentsPage = () => {
 
   const parsedAmount = Number.parseFloat(amount);
   const amountValue = Number.isFinite(parsedAmount) ? parsedAmount : 0;
+  const normalizedAmountValue = normalizeMoneyValue(amountValue);
 
   const keepPhoneCaretAfterPrefix = () => {
     requestAnimationFrame(() => {
@@ -562,7 +569,7 @@ const PaymentsPage = () => {
   };
 
   const commission = useMemo(() => {
-    if (amountValue <= 0) return 0;
+    if (normalizedAmountValue <= 0) return 0;
 
     if (method === 'own') {
       return 0;
@@ -570,7 +577,7 @@ const PaymentsPage = () => {
 
     if (method === 'phone') {
       if (sourceBankId === recipientPhoneBankId) return 0;
-      return Math.round(amountValue * 0.005);
+      return Math.round(normalizedAmountValue * 0.005);
     }
 
     if (sourceBankId === recipientBankId) {
@@ -578,21 +585,22 @@ const PaymentsPage = () => {
     }
 
     if (sourceBankId === 'kaspi') {
-      return Math.max(Math.round(amountValue * 0.0095), 200);
+      return Math.max(Math.round(normalizedAmountValue * 0.0095), 200);
     }
 
     if (sourceBankId === 'halyk') {
-      return amountValue <= 40000 ? 150 : Math.round(amountValue * 0.0095);
+      return normalizedAmountValue <= 40000 ? 150 : Math.round(normalizedAmountValue * 0.0095);
     }
 
     if (sourceBankId === 'bcc' || sourceBankId === 'freedom') {
-      return Math.max(Math.round(amountValue * 0.007), 250);
+      return Math.max(Math.round(normalizedAmountValue * 0.007), 250);
     }
 
-    return Math.max(Math.round(amountValue * 0.007), 250);
-  }, [amountValue, method, sourceBankId, recipientBankId, recipientPhoneBankId]);
+    return Math.max(Math.round(normalizedAmountValue * 0.007), 250);
+  }, [normalizedAmountValue, method, sourceBankId, recipientBankId, recipientPhoneBankId]);
 
-  const totalDebit = Math.max(0, amountValue + commission);
+  const normalizedCommission = normalizeMoneyValue(commission);
+  const totalDebit = normalizeMoneyValue(normalizedAmountValue + normalizedCommission);
   const insufficientFunds = Boolean(sourceAccount && totalDebit > sourceAccount.balance);
 
   const openMethodForm = (nextMethod: TransferMethod) => {
@@ -600,8 +608,6 @@ const PaymentsPage = () => {
     setError(null);
     setScreen('form');
   };
-
-  const commissionText = `Комиссия: ${formatCurrency(commission).replace('KZT', '₸')}`;
 
   const createTransactionRecord = async (params: {
     userId: string;
@@ -645,7 +651,7 @@ const PaymentsPage = () => {
       return;
     }
 
-    if (amountValue <= 0) {
+    if (normalizedAmountValue <= 0) {
       setError('Введите сумму перевода больше 0.');
       return;
     }
@@ -720,7 +726,7 @@ const PaymentsPage = () => {
 
         if (updateSourceError) throw updateSourceError;
 
-        const destinationNewBalance = destinationAccount.balance + amountValue;
+        const destinationNewBalance = destinationAccount.balance + normalizedAmountValue;
 
         const { error: updateDestinationError } = await supabase
           .from('new_scheta')
@@ -743,13 +749,13 @@ const PaymentsPage = () => {
           description: `Перевод на свой счет ${destinationAccount.bank}`,
           counterparty: destinationAccount.bank,
           category: 'Переводы',
-          commission,
+          commission: normalizedCommission,
           bankName: sourceAccount.bank,
           kind: 'expense'
         });
         await createTransactionRecord({
           userId: profileUserId,
-          amount: amountValue,
+          amount: normalizedAmountValue,
           description: `Перевод со своего счета ${sourceAccount.bank}`,
           counterparty: sourceAccount.bank,
           category: 'Переводы',
@@ -792,8 +798,8 @@ const PaymentsPage = () => {
         const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
           p_sender_iin: profileUserId,
           p_recipient_iin: recipientUserId,
-          p_amount: amountValue,
-          p_fee: commission,
+          p_amount: normalizeMoneyValue(normalizedAmountValue),
+          p_fee: normalizeMoneyValue(normalizedCommission),
           p_sender_bank: senderBankName,
           p_recipient_bank: selectedRecipientBankName
         });
@@ -834,7 +840,7 @@ const PaymentsPage = () => {
           description: transferDescription,
           counterparty: transferCounterparty,
           category: 'Переводы',
-          commission,
+          commission: normalizedCommission,
           bankName: sourceAccount.bank,
           kind: 'expense'
         });
@@ -1201,8 +1207,15 @@ const PaymentsPage = () => {
                   placeholder="5000"
                   className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                 />
-                <p className="text-xs text-slate-400">{commissionText}</p>
-                <p className="text-xs text-slate-500">К списанию: {formatTengePlain(totalDebit)}</p>
+                <p className="text-xs text-slate-400">
+                  Получатель получит: {formatTengePlain(normalizedAmountValue)}
+                </p>
+                <p className="text-xs text-slate-400">
+                  Комиссия FinHub: {formatTengePlain(normalizedCommission)}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Итого к списанию с вашего счета: {formatTengePlain(totalDebit)}
+                </p>
               </div>
 
               <div className="rounded-xl border border-slate-700/70 bg-slate-900/60 p-3 text-xs text-slate-300">

@@ -42,11 +42,17 @@ export interface NewTranzakcii {
     id?: string;              // uuid, auto-generated
     user_id: string;          // TEXT → ссылка на new_polzovateli.id
     amount: number;           // сумма
+    clean_amount?: number;    // чистая сумма перевода (без комиссии)
     description?: string | null;
     category?: string | null;
     counterparty?: string | null;
     commission?: number;
     bank?: string | null;     // название банка, из которого операция
+    sender_iin?: string | null;
+    sender_bank?: string | null;
+    recipient_iin?: string | null;
+    recipient_bank?: string | null;
+    balance_after?: number | null;
     type: 'income' | 'expense';
     date: string;             // ISO timestamp
 }

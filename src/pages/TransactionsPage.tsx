@@ -23,8 +23,25 @@ const formatDateTime = (value: string) => {
   }).format(date);
 };
 
-const getTransactionLabel = (tx: DashboardTransaction) =>
-  tx.description ?? tx.counterparty ?? tx.category ?? 'Операция';
+const formatTenge = (value: number) =>
+  `${new Intl.NumberFormat('ru-KZ', {
+    maximumFractionDigits: 0
+  }).format(value)} Т`;
+
+const formatSignedTenge = (value: number) =>
+  `${value > 0 ? '+' : value < 0 ? '-' : ''}${formatTenge(Math.abs(value))}`;
+
+const formatIin = (value: string | null) => {
+  if (!value) return '—';
+  return value.trim();
+};
+
+const getTransferSummary = (tx: DashboardTransaction) => {
+  const senderBank = tx.senderBank ?? tx.bank ?? '—';
+  const recipientBank = tx.recipientBank ?? '—';
+  const balanceAfterText = tx.balanceAfter !== null ? formatTenge(tx.balanceAfter) : '—';
+  return `Перевод из [${senderBank}] в [${recipientBank}] | Сумма: ${formatSignedTenge(tx.amount)} | Остаток: ${balanceAfterText}`;
+};
 
 const getTransactionIcon = (tx: DashboardTransaction): { badge: string; tone: string } => {
   const label = (tx.category ?? tx.counterparty ?? '').toLowerCase();
@@ -63,7 +80,7 @@ const TransactionsPage = () => {
         setTransactions(data);
       } catch (e) {
         if (!isMounted) return;
-        setError('Не удалось загрузить историю транзакций.');
+        setError('Не удалось загрузить историю. Проверьте связку profile.id -> new_scheta.vladilec_id.');
         // eslint-disable-next-line no-console
         console.error(e);
       } finally {
@@ -124,17 +141,19 @@ const TransactionsPage = () => {
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium text-slate-100">
-                      {getTransactionLabel(tx)}
+                    <p className="text-[12px] font-medium leading-5 text-slate-100">
+                      {getTransferSummary(tx)}
                     </p>
-                    <p className="mt-0.5 truncate text-[11px] text-slate-400">
-                      {formatDateTime(tx.date)} • {tx.category ?? 'Без категории'}
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                      Отправитель: {formatIin(tx.senderIin)} ({tx.senderBank ?? '—'}) • Получатель:{' '}
+                      {formatIin(tx.recipientIin)} ({tx.recipientBank ?? '—'})
                     </p>
-                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                      {tx.bank ? `${tx.bank} • ` : ''}
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      Чистая сумма: {formatTenge(tx.cleanAmount)} •{' '}
                       {tx.commission > 0
-                        ? `Комиссия: ${formatCurrency(tx.commission).replace('KZT', '₸')}`
-                        : 'Без комиссии'}
+                        ? `Комиссия: ${formatTenge(tx.commission)}`
+                        : 'Без комиссии'}{' '}
+                      • {formatDateTime(tx.date)}
                     </p>
                   </div>
 
@@ -149,7 +168,7 @@ const TransactionsPage = () => {
 
           {!loading && transactions.length === 0 && (
             <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
-              В таблице `transactions` пока нет записей за последний месяц.
+              В таблице `new_tranzakcii` пока нет записей за последний месяц.
             </p>
           )}
 

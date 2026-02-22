@@ -1,4 +1,4 @@
-import { getSupabaseClient } from './supabaseClient';
+import { getSupabaseClient, isSchemaRelatedError } from './supabaseClient';
 import { resolveRequiredProfileIdByAuthUserId } from './profileIdentity';
 
 export type DailyAnalyticsPoint = {
@@ -21,12 +21,19 @@ export type DashboardAccount = {
 
 export type DashboardTransaction = {
   id: string;
+  userId: string | null;
   amount: number;
+  cleanAmount: number;
   description: string | null;
   category: string | null;
   counterparty: string | null;
   commission: number;
   bank: string | null;
+  senderIin: string | null;
+  senderBank: string | null;
+  recipientIin: string | null;
+  recipientBank: string | null;
+  balanceAfter: number | null;
   date: string;
   kind: 'income' | 'expense' | 'other';
 };
@@ -171,35 +178,119 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     return 'other';
   };
 
-  const { data: transactionsData, error: txError } = await supabase
-    .from('new_tranzakcii')
-    .select('id, amount, description, category, counterparty, commission, bank, type, date')
-    .eq('user_id', profileUserId)
-    .gte('date', monthAgo.toISOString())
-    .order('date', { ascending: false })
-    .limit(120);
+  const asTextOrNull = (value: unknown): string | null => {
+    const text = String(value ?? '').trim();
+    return text.length > 0 ? text : null;
+  };
+
+  const asNumberOrNull = (value: unknown): number | null => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  const normalizeBankKey = (value: string | null | undefined) => String(value ?? '').trim().toLowerCase();
+
+  const parseSelectResult = async (selectClause: string) =>
+    supabase
+      .from('new_tranzakcii')
+      .select(selectClause)
+      .eq('user_id', profileUserId)
+      .gte('date', monthAgo.toISOString())
+      .order('date', { ascending: false })
+      .limit(120);
+
+  const baseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, date';
+  const extendedSelect = `${baseSelect}, sender_iin, sender_bank, recipient_iin, recipient_bank, clean_amount, balance_after`;
+
+  let { data: transactionsData, error: txError } = await parseSelectResult(extendedSelect);
+
+  if (txError && isSchemaRelatedError(txError)) {
+    const fallbackResult = await parseSelectResult(baseSelect);
+    transactionsData = fallbackResult.data;
+    txError = fallbackResult.error;
+  }
 
   if (txError) throw txError;
 
-  return (transactionsData ?? []).map((tx) => {
-    const amount = Number(tx.amount ?? 0);
-    const description = tx.description ? String(tx.description) : null;
-    const category = tx.category ? String(tx.category) : null;
-    const counterparty = tx.counterparty ? String(tx.counterparty) : null;
-    const commission = Number(tx.commission ?? 0);
-    const kind = normalizeKind(String(tx.type ?? ''), amount);
-    const bank = tx.bank ? String(tx.bank) : null;
+  // Привязка к владельцу счетов: используем vladilec_id = profile.id
+  // для вычисления остатка после операции, если balance_after не хранится в записи.
+  const { data: accountsData, error: accountsError } = await supabase
+    .from('new_scheta')
+    .select('nazvanie_banka, balans')
+    .eq('vladilec_id', profileUserId);
 
-    return {
-      id: String(tx.id ?? crypto.randomUUID()),
+  const runningBalanceByBank = new Map<string, number>();
+  if (accountsError) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to load account balances for history fallback:', accountsError);
+  } else {
+    for (const account of accountsData ?? []) {
+      const bankName = asTextOrNull((account as { nazvanie_banka?: string | null }).nazvanie_banka);
+      const balance = asNumberOrNull((account as { balans?: number | null }).balans);
+      if (!bankName || balance === null) continue;
+      runningBalanceByBank.set(normalizeBankKey(bankName), balance);
+    }
+  }
+
+  const result: DashboardTransaction[] = [];
+
+  for (const tx of transactionsData ?? []) {
+    const txRecord = tx as Record<string, unknown>;
+
+    const amount = Number(txRecord.amount ?? 0);
+    const commission = Number(txRecord.commission ?? 0);
+    const kind = normalizeKind(asTextOrNull(txRecord.type), amount);
+
+    const description = asTextOrNull(txRecord.description);
+    const category = asTextOrNull(txRecord.category);
+    const counterparty = asTextOrNull(txRecord.counterparty);
+    const bank = asTextOrNull(txRecord.bank);
+
+    const senderIin = asTextOrNull(txRecord.sender_iin) ?? (kind === 'expense' ? profileUserId : null);
+    const recipientIin =
+      asTextOrNull(txRecord.recipient_iin) ?? (kind === 'income' ? profileUserId : null);
+    const senderBank = asTextOrNull(txRecord.sender_bank) ?? (kind === 'expense' ? bank : null);
+    const recipientBank = asTextOrNull(txRecord.recipient_bank) ?? (kind === 'income' ? bank : null);
+
+    const cleanAmountFromRow = asNumberOrNull(txRecord.clean_amount);
+    const cleanAmount =
+      cleanAmountFromRow !== null
+        ? Math.abs(cleanAmountFromRow)
+        : kind === 'expense'
+          ? Math.max(0, Math.abs(amount) - Math.max(0, commission))
+          : Math.abs(amount);
+
+    let balanceAfter = asNumberOrNull(txRecord.balance_after);
+    const balanceBankName = senderBank ?? recipientBank ?? bank;
+    const balanceBankKey = normalizeBankKey(balanceBankName);
+
+    if (balanceAfter === null && balanceBankKey && runningBalanceByBank.has(balanceBankKey)) {
+      const currentBalance = runningBalanceByBank.get(balanceBankKey) ?? 0;
+      balanceAfter = currentBalance;
+      runningBalanceByBank.set(balanceBankKey, currentBalance - amount);
+    } else if (balanceAfter !== null && balanceBankKey) {
+      runningBalanceByBank.set(balanceBankKey, balanceAfter - amount);
+    }
+
+    result.push({
+      id: String(txRecord.id ?? crypto.randomUUID()),
+      userId: asTextOrNull(txRecord.user_id),
       amount,
+      cleanAmount,
       description,
       category,
       counterparty,
       commission,
       bank,
-      date: String(tx.date ?? ''),
+      senderIin,
+      senderBank,
+      recipientIin,
+      recipientBank,
+      balanceAfter,
+      date: String(txRecord.date ?? ''),
       kind
-    };
-  });
+    });
+  }
+
+  return result;
 };

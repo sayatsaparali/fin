@@ -59,6 +59,41 @@ const buildFallbackData = (): DashboardData => ({
   ]
 });
 
+const asTextOrNull = (value: unknown): string | null => {
+  const text = String(value ?? '').trim();
+  return text.length > 0 ? text : null;
+};
+
+type ResolvedUserIdentity = {
+  profileId: string;
+  iin: string;
+};
+
+const resolveCurrentUserIdentity = async (
+  supabase: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  authUserId: string
+): Promise<ResolvedUserIdentity> => {
+  const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUserId);
+
+  const parseProfileSelect = async (selectClause: string) =>
+    supabase.from('new_polzovateli').select(selectClause).eq('id', profileId).maybeSingle();
+
+  let { data: profileData, error: profileError } = await parseProfileSelect('id, iin');
+
+  if (profileError && isSchemaRelatedError(profileError)) {
+    const fallbackResult = await parseProfileSelect('id');
+    profileData = fallbackResult.data;
+    profileError = fallbackResult.error;
+  }
+
+  if (profileError) throw profileError;
+
+  const profileRecord = profileData as { id?: string | null; iin?: string | null } | null;
+  const iin = asTextOrNull(profileRecord?.iin) ?? asTextOrNull(profileRecord?.id) ?? profileId;
+
+  return { profileId, iin };
+};
+
 export const fetchDashboardData = async (): Promise<DashboardData> => {
   const supabase = getSupabaseClient();
 
@@ -74,7 +109,10 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   if (userError || !user) {
     throw userError ?? new Error('Пользователь не найден.');
   }
-  const profileUserId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
+  const { profileId: profileUserId, iin: ownerIin } = await resolveCurrentUserIdentity(
+    supabase,
+    user.id
+  );
 
   // 1. Счета из new_scheta
   const { data: accountsData, error: accountsError } = await supabase
@@ -97,19 +135,27 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   const weekAgo = new Date(now);
   weekAgo.setDate(now.getDate() - 6);
 
-  const parseAnalyticsSelect = async (selectClause: string) =>
+  const parseAnalyticsSelect = async (
+    selectClause: string,
+    ownerColumn: 'vladilec_id' | 'user_id',
+    ownerValue: string
+  ) =>
     supabase
       .from('new_tranzakcii')
       .select(selectClause)
-      .eq('user_id', profileUserId)
+      .eq(ownerColumn, ownerValue)
       .gte('date', weekAgo.toISOString())
       .order('date', { ascending: false })
       .limit(200);
 
-  let { data: transactionsData, error: txError } = await parseAnalyticsSelect('amount, type, tip, date');
+  let { data: transactionsData, error: txError } = await parseAnalyticsSelect(
+    'amount, type, tip, date',
+    'vladilec_id',
+    ownerIin
+  );
 
   if (txError && isSchemaRelatedError(txError)) {
-    const fallbackResult = await parseAnalyticsSelect('amount, type, date');
+    const fallbackResult = await parseAnalyticsSelect('amount, type, date', 'user_id', profileUserId);
     transactionsData = fallbackResult.data;
     txError = fallbackResult.error;
   }
@@ -173,7 +219,10 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   if (userError || !user) {
     throw userError ?? new Error('Пользователь не найден.');
   }
-  const profileUserId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
+  const { profileId: profileUserId, iin: ownerIin } = await resolveCurrentUserIdentity(
+    supabase,
+    user.id
+  );
 
   const monthAgo = new Date();
   monthAgo.setDate(monthAgo.getDate() - 30);
@@ -208,11 +257,6 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     return 'other';
   };
 
-  const asTextOrNull = (value: unknown): string | null => {
-    const text = String(value ?? '').trim();
-    return text.length > 0 ? text : null;
-  };
-
   const asNumberOrNull = (value: unknown): number | null => {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : null;
@@ -220,23 +264,31 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
   const normalizeBankKey = (value: string | null | undefined) => String(value ?? '').trim().toLowerCase();
 
-  const parseSelectResult = async (selectClause: string) =>
+  const parseSelectResult = async (
+    selectClause: string,
+    ownerColumn: 'vladilec_id' | 'user_id',
+    ownerValue: string
+  ) =>
     supabase
       .from('new_tranzakcii')
       .select(selectClause)
-      .eq('user_id', profileUserId)
+      .eq(ownerColumn, ownerValue)
       .gte('date', monthAgo.toISOString())
       .order('date', { ascending: false })
       .limit(120);
 
-  const baseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, tip, date';
+  const baseSelect = 'id, vladilec_id, user_id, amount, description, category, counterparty, commission, bank, type, tip, date';
   const fallbackBaseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, date';
   const extendedSelect = `${baseSelect}, sender_iin, sender_bank, recipient_iin, recipient_bank, clean_amount, balance_after`;
 
-  let { data: transactionsData, error: txError } = await parseSelectResult(extendedSelect);
+  let { data: transactionsData, error: txError } = await parseSelectResult(
+    extendedSelect,
+    'vladilec_id',
+    ownerIin
+  );
 
   if (txError && isSchemaRelatedError(txError)) {
-    const fallbackResult = await parseSelectResult(fallbackBaseSelect);
+    const fallbackResult = await parseSelectResult(fallbackBaseSelect, 'user_id', profileUserId);
     transactionsData = fallbackResult.data;
     txError = fallbackResult.error;
   }
@@ -289,9 +341,9 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     const counterparty = asTextOrNull(txRecord.counterparty);
     const bank = asTextOrNull(txRecord.bank);
 
-    const senderIin = asTextOrNull(txRecord.sender_iin) ?? (kind === 'expense' ? profileUserId : null);
+    const senderIin = asTextOrNull(txRecord.sender_iin) ?? (kind === 'expense' ? ownerIin : null);
     const recipientIin =
-      asTextOrNull(txRecord.recipient_iin) ?? (kind === 'income' ? profileUserId : null);
+      asTextOrNull(txRecord.recipient_iin) ?? (kind === 'income' ? ownerIin : null);
     const senderBank = asTextOrNull(txRecord.sender_bank) ?? (kind === 'expense' ? bank : null);
     const recipientBank = asTextOrNull(txRecord.recipient_bank) ?? (kind === 'income' ? bank : null);
 
@@ -317,7 +369,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
     result.push({
       id: String(txRecord.id ?? crypto.randomUUID()),
-      userId: asTextOrNull(txRecord.user_id),
+      userId: asTextOrNull(txRecord.vladilec_id) ?? asTextOrNull(txRecord.user_id),
       tip,
       amount,
       cleanAmount,

@@ -122,7 +122,7 @@ const TransactionsPage = () => {
         setTransactions(data);
       } catch (e) {
         if (!isMounted) return;
-        setError('Не удалось загрузить историю. Проверьте связку profile.id -> new_scheta.vladilec_id.');
+        setError('Не удалось загрузить историю. Проверьте IIN и поле new_tranzakcii.vladilec_id.');
         // eslint-disable-next-line no-console
         console.error(e);
       } finally {

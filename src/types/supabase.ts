@@ -41,6 +41,7 @@ export type NewSchetaUpdate = Partial<Pick<NewScheta, 'balans'>>;
 export interface NewTranzakcii {
     id?: string;              // uuid, auto-generated
     user_id: string;          // TEXT → ссылка на new_polzovateli.id
+    vladilec_id?: string | null; // IIN владельца записи
     tip?: 'plus' | 'minus' | null;
     amount: number;           // сумма
     clean_amount?: number;    // чистая сумма перевода (без комиссии)

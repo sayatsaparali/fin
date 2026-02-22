@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import {
   fetchTransactionsHistory,
   type DashboardTransaction
@@ -36,31 +37,72 @@ const formatIin = (value: string | null) => {
   return value.trim();
 };
 
+const getVisualTip = (tx: DashboardTransaction): 'plus' | 'minus' | 'other' => {
+  if (tx.tip === 'plus' || tx.tip === 'minus') return tx.tip;
+  if (tx.kind === 'income') return 'plus';
+  if (tx.kind === 'expense') return 'minus';
+  return 'other';
+};
+
+const getDirectionDescription = (tx: DashboardTransaction) => {
+  const tip = getVisualTip(tx);
+  if (tip === 'plus') {
+    return `Перевод от ${formatIin(tx.senderIin)}`;
+  }
+  if (tip === 'minus') {
+    return `Перевод пользователю ${formatIin(tx.recipientIin)}`;
+  }
+  return tx.description ?? tx.counterparty ?? tx.category ?? 'Операция';
+};
+
 const getTransferSummary = (tx: DashboardTransaction) => {
+  const tip = getVisualTip(tx);
   const senderBank = tx.senderBank ?? tx.bank ?? '—';
   const recipientBank = tx.recipientBank ?? '—';
   const balanceAfterText = tx.balanceAfter !== null ? formatTenge(tx.balanceAfter) : '—';
-  return `Перевод из [${senderBank}] в [${recipientBank}] | Сумма: ${formatSignedTenge(tx.amount)} | Остаток: ${balanceAfterText}`;
+  const signedAmount =
+    tip === 'plus' ? formatSignedTenge(Math.abs(tx.amount)) : tip === 'minus' ? formatSignedTenge(-Math.abs(tx.amount)) : formatSignedTenge(tx.amount);
+  return `Перевод из [${senderBank}] в [${recipientBank}] | Сумма: ${signedAmount} | Остаток: ${balanceAfterText}`;
 };
 
-const getTransactionIcon = (tx: DashboardTransaction): { badge: string; tone: string } => {
+const getTransactionIcon = (
+  tx: DashboardTransaction
+): { icon: JSX.Element; tone: string } => {
+  const tip = getVisualTip(tx);
+  if (tip === 'plus') {
+    return {
+      icon: <ArrowUpRight size={14} />,
+      tone: 'bg-emerald-500/20 text-emerald-300'
+    };
+  }
+  if (tip === 'minus') {
+    return {
+      icon: <ArrowDownLeft size={14} />,
+      tone: 'bg-rose-500/20 text-rose-300'
+    };
+  }
+
   const label = (tx.category ?? tx.counterparty ?? '').toLowerCase();
 
   if (label.includes('taxi') || label.includes('yandex')) {
-    return { badge: 'TX', tone: 'bg-sky-500/20 text-sky-300' };
+    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-sky-500/20 text-sky-300' };
   }
   if (label.includes('magnum') || label.includes('starbucks')) {
-    return { badge: 'SH', tone: 'bg-violet-500/20 text-violet-300' };
+    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-violet-500/20 text-violet-300' };
   }
   if (label.includes('коммун') || label.includes('аренд')) {
-    return { badge: 'HM', tone: 'bg-amber-500/20 text-amber-300' };
+    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-amber-500/20 text-amber-300' };
   }
   if (label.includes('app store')) {
-    return { badge: 'AP', tone: 'bg-indigo-500/20 text-indigo-300' };
+    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-indigo-500/20 text-indigo-300' };
   }
-  if (tx.kind === 'income') return { badge: 'IN', tone: 'bg-emerald-500/20 text-emerald-300' };
-  if (tx.kind === 'expense') return { badge: 'EX', tone: 'bg-rose-500/20 text-rose-300' };
-  return { badge: 'TR', tone: 'bg-slate-600/30 text-slate-300' };
+  if (tx.kind === 'income') {
+    return { icon: <ArrowUpRight size={14} />, tone: 'bg-emerald-500/20 text-emerald-300' };
+  }
+  if (tx.kind === 'expense') {
+    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-rose-500/20 text-rose-300' };
+  }
+  return { icon: <ArrowDownLeft size={14} />, tone: 'bg-slate-600/30 text-slate-300' };
 };
 
 const TransactionsPage = () => {
@@ -118,8 +160,9 @@ const TransactionsPage = () => {
       <section className="glass-panel mt-4 px-3 py-3 sm:px-5 sm:py-4">
         <div className="max-h-[70vh] space-y-1.5 overflow-y-auto pr-1">
           {transactions.map((tx) => {
-            const isIncome = tx.kind === 'income';
-            const isExpense = tx.kind === 'expense';
+            const tip = getVisualTip(tx);
+            const isIncome = tip === 'plus';
+            const isExpense = tip === 'minus';
             const icon = getTransactionIcon(tx);
             const amountColor = isIncome
               ? 'text-emerald-300'
@@ -137,7 +180,7 @@ const TransactionsPage = () => {
                   <div
                     className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${icon.tone}`}
                   >
-                    {icon.badge}
+                    {icon.icon}
                   </div>
 
                   <div className="min-w-0 flex-1">
@@ -145,10 +188,11 @@ const TransactionsPage = () => {
                       {getTransferSummary(tx)}
                     </p>
                     <p className="mt-0.5 text-[11px] text-slate-400">
-                      Отправитель: {formatIin(tx.senderIin)} ({tx.senderBank ?? '—'}) • Получатель:{' '}
-                      {formatIin(tx.recipientIin)} ({tx.recipientBank ?? '—'})
+                      {getDirectionDescription(tx)}
                     </p>
                     <p className="mt-0.5 text-[11px] text-slate-500">
+                      Отправитель: {formatIin(tx.senderIin)} ({tx.senderBank ?? '—'}) • Получатель:{' '}
+                      {formatIin(tx.recipientIin)} ({tx.recipientBank ?? '—'}) •{' '}
                       Чистая сумма: {formatTenge(tx.cleanAmount)} •{' '}
                       {tx.commission > 0
                         ? `Комиссия: ${formatTenge(tx.commission)}`

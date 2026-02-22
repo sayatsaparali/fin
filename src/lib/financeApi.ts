@@ -22,6 +22,7 @@ export type DashboardAccount = {
 export type DashboardTransaction = {
   id: string;
   userId: string | null;
+  tip: 'plus' | 'minus' | 'other';
   amount: number;
   cleanAmount: number;
   description: string | null;
@@ -96,21 +97,31 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   const weekAgo = new Date(now);
   weekAgo.setDate(now.getDate() - 6);
 
-  const { data: transactionsData, error: txError } = await supabase
-    .from('new_tranzakcii')
-    .select('amount, type, date')
-    .eq('user_id', profileUserId)
-    .gte('date', weekAgo.toISOString())
-    .order('date', { ascending: false })
-    .limit(200);
+  const parseAnalyticsSelect = async (selectClause: string) =>
+    supabase
+      .from('new_tranzakcii')
+      .select(selectClause)
+      .eq('user_id', profileUserId)
+      .gte('date', weekAgo.toISOString())
+      .order('date', { ascending: false })
+      .limit(200);
 
-  const normalizedTransactions: Array<{ amount: number; type: string; occurredAt: string }> = [];
+  let { data: transactionsData, error: txError } = await parseAnalyticsSelect('amount, type, tip, date');
+
+  if (txError && isSchemaRelatedError(txError)) {
+    const fallbackResult = await parseAnalyticsSelect('amount, type, date');
+    transactionsData = fallbackResult.data;
+    txError = fallbackResult.error;
+  }
+
+  const normalizedTransactions: Array<{ amount: number; type: string; tip: string; occurredAt: string }> = [];
 
   if (!txError) {
     for (const tx of transactionsData ?? []) {
       normalizedTransactions.push({
         amount: Number(tx.amount ?? 0),
         type: String(tx.type ?? ''),
+        tip: String((tx as { tip?: string }).tip ?? ''),
         occurredAt: String(tx.date ?? '')
       });
     }
@@ -127,12 +138,13 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
 
     const dayIndex = date.getDay();
     const label = weekdayLabels[dayIndex];
-    const amount = tx.amount;
+    const amount = Math.abs(tx.amount);
     const type = tx.type;
+    const tip = tx.tip.toLowerCase();
 
-    if (type === 'income') {
+    if (tip === 'plus' || type === 'income') {
       analyticsMap[label].income += amount;
-    } else if (type === 'expense') {
+    } else if (tip === 'minus' || type === 'expense') {
       analyticsMap[label].expense += amount;
     }
   });
@@ -178,6 +190,24 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     return 'other';
   };
 
+  const normalizeTip = (
+    rawTip: string | null | undefined,
+    rawType: string | null | undefined,
+    amount: number
+  ): DashboardTransaction['tip'] => {
+    const tip = String(rawTip ?? '').toLowerCase();
+    if (tip === 'plus') return 'plus';
+    if (tip === 'minus') return 'minus';
+
+    const type = String(rawType ?? '').toLowerCase();
+    if (type === 'income') return 'plus';
+    if (type === 'expense') return 'minus';
+
+    if (amount > 0) return 'plus';
+    if (amount < 0) return 'minus';
+    return 'other';
+  };
+
   const asTextOrNull = (value: unknown): string | null => {
     const text = String(value ?? '').trim();
     return text.length > 0 ? text : null;
@@ -199,13 +229,14 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
       .order('date', { ascending: false })
       .limit(120);
 
-  const baseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, date';
+  const baseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, tip, date';
+  const fallbackBaseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, date';
   const extendedSelect = `${baseSelect}, sender_iin, sender_bank, recipient_iin, recipient_bank, clean_amount, balance_after`;
 
   let { data: transactionsData, error: txError } = await parseSelectResult(extendedSelect);
 
   if (txError && isSchemaRelatedError(txError)) {
-    const fallbackResult = await parseSelectResult(baseSelect);
+    const fallbackResult = await parseSelectResult(fallbackBaseSelect);
     transactionsData = fallbackResult.data;
     txError = fallbackResult.error;
   }
@@ -237,9 +268,21 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   for (const tx of transactionsData ?? []) {
     const txRecord = tx as Record<string, unknown>;
 
-    const amount = Number(txRecord.amount ?? 0);
+    const amountRaw = Number(txRecord.amount ?? 0);
     const commission = Number(txRecord.commission ?? 0);
-    const kind = normalizeKind(asTextOrNull(txRecord.type), amount);
+    const tip = normalizeTip(asTextOrNull(txRecord.tip), asTextOrNull(txRecord.type), amountRaw);
+    const amount =
+      tip === 'minus'
+        ? -Math.abs(amountRaw)
+        : tip === 'plus'
+          ? Math.abs(amountRaw)
+          : amountRaw;
+    const kind =
+      tip === 'plus'
+        ? 'income'
+        : tip === 'minus'
+          ? 'expense'
+          : normalizeKind(asTextOrNull(txRecord.type), amount);
 
     const description = asTextOrNull(txRecord.description);
     const category = asTextOrNull(txRecord.category);
@@ -256,7 +299,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     const cleanAmount =
       cleanAmountFromRow !== null
         ? Math.abs(cleanAmountFromRow)
-        : kind === 'expense'
+        : tip === 'minus' || kind === 'expense'
           ? Math.max(0, Math.abs(amount) - Math.max(0, commission))
           : Math.abs(amount);
 
@@ -275,6 +318,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     result.push({
       id: String(txRecord.id ?? crypto.randomUUID()),
       userId: asTextOrNull(txRecord.user_id),
+      tip,
       amount,
       cleanAmount,
       description,

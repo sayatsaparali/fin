@@ -41,6 +41,7 @@ export type NewSchetaUpdate = Partial<Pick<NewScheta, 'balans'>>;
 export interface NewTranzakcii {
     id?: string;              // uuid, auto-generated
     user_id: string;          // TEXT → ссылка на new_polzovateli.id
+    tip?: 'plus' | 'minus' | null;
     amount: number;           // сумма
     clean_amount?: number;    // чистая сумма перевода (без комиссии)
     description?: string | null;
@@ -53,7 +54,7 @@ export interface NewTranzakcii {
     recipient_iin?: string | null;
     recipient_bank?: string | null;
     balance_after?: number | null;
-    type: 'income' | 'expense';
+    type?: 'income' | 'expense' | null;
     date: string;             // ISO timestamp
 }
 

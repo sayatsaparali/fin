@@ -894,8 +894,8 @@ const PaymentsPage = () => {
   const sourceBankMeta = getBankMeta(sourceAccount?.bank);
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
-      <section className="glass-panel p-5 sm:p-6">
+    <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col max-sm:px-3 max-sm:py-4 sm:px-6 sm:py-6 lg:px-8">
+      <section className="glass-panel max-sm:p-4 sm:p-6">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400">FinHub</p>
@@ -1012,7 +1012,7 @@ const PaymentsPage = () => {
 
               <div className="space-y-2">
                 <label className="text-xs font-medium text-slate-300">Откуда</label>
-                <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
+                <div className="max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:gap-2 max-sm:overflow-x-auto max-sm:pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
                   {accounts.map((account) => {
                     const bankMeta = getBankMeta(account.bank);
                     return (
@@ -1023,7 +1023,7 @@ const PaymentsPage = () => {
                         onPointerDown={(event) =>
                           triggerTouchAction(event, () => setFromAccountId(account.id))
                         }
-                        className={`min-h-12 min-w-[78vw] shrink-0 snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
+                        className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
                           fromAccountId === account.id
                             ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
                             : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
@@ -1046,7 +1046,7 @@ const PaymentsPage = () => {
               {method === 'own' && (
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-300">Куда</label>
-                  <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
+                  <div className="max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:gap-2 max-sm:overflow-x-auto max-sm:pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
                     {accounts.map((account) => {
                       const bankMeta = getBankMeta(account.bank);
                       return (
@@ -1057,7 +1057,7 @@ const PaymentsPage = () => {
                           onPointerDown={(event) =>
                             triggerTouchAction(event, () => setToAccountId(account.id))
                           }
-                          className={`min-h-12 min-w-[78vw] shrink-0 snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
+                          className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
                             toAccountId === account.id
                               ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
                               : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'

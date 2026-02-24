@@ -4,8 +4,7 @@ import { navigationItems } from './navigationItems';
 const BottomNavigation = () => {
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-700/80 bg-gray-900/90 pt-1 shadow-[0_-8px_26px_rgba(2,6,23,0.65)] backdrop-blur-xl md:hidden"
-      style={{ paddingBottom: 'calc(var(--fh-safe-bottom) + 0.35rem)' }}
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-700/80 bg-gray-900/90 pb-[env(safe-area-inset-bottom)] pt-1 shadow-[0_-8px_26px_rgba(2,6,23,0.65)] backdrop-blur-xl md:hidden"
       aria-label="Мобильная навигация FinHub"
     >
       <ul className="grid grid-cols-4">

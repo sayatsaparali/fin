@@ -352,7 +352,13 @@ const DashboardPage = () => {
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div
+          className={`flex gap-3 ${
+            compactMobile
+              ? 'flex-col'
+              : 'flex-col sm:flex-row sm:items-center sm:justify-between'
+          }`}
+        >
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
             <span>Деньги будут недоступны до</span>
             <span className="rounded-full bg-slate-800/80 px-2 py-0.5 font-medium text-slate-100">
@@ -360,16 +366,20 @@ const DashboardPage = () => {
             </span>
             <span>за исключением экстренных случаев</span>
           </div>
-          <div className="flex gap-2">
+          <div className={`flex gap-2 ${compactMobile ? 'flex-col' : ''}`}>
             <button
               type="button"
-              className="min-h-11 flex-1 rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs font-medium text-slate-200 shadow-sm transition hover:border-slate-400 hover:bg-slate-800 sm:flex-none"
+              className={`min-h-12 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs font-medium text-slate-200 shadow-sm transition hover:border-slate-400 hover:bg-slate-800 ${
+                compactMobile ? '' : 'sm:flex-none'
+              }`}
             >
               Сценарий расходов
             </button>
             <button
               type="button"
-              className="min-h-11 flex-1 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 sm:flex-none"
+              className={`min-h-12 w-full rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 ${
+                compactMobile ? '' : 'sm:flex-none'
+              }`}
             >
               Активировать изоляцию
             </button>
@@ -423,8 +433,8 @@ const DashboardPage = () => {
               fill="none"
               stroke="currentColor"
               strokeWidth="1.7"
-                className="h-4 w-4"
-              >
+              className="h-4 w-4"
+            >
               <path d="M8 10a4 4 0 1 1 8 0c0 2 .5 3.5 1 4.5.5 1 .5 1.5.5 1.5H6.5s0-.5.5-1.5 1-2.5 1-4.5Z" />
               <path d="M10 18a2 2 0 1 0 4 0" />
             </svg>
@@ -459,11 +469,11 @@ const DashboardPage = () => {
       )}
 
       {/* Layout grid */}
-      <main className="grid flex-1 gap-[var(--fh-space-section)] lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)]">
+      <main className="max-sm:flex max-sm:flex-col sm:grid flex-1 gap-[var(--fh-space-section)] lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)]">
         {/* Left column */}
-        <section className="flex flex-col gap-5">
+        <section className="flex w-full flex-col gap-5">
           {/* Total Balance */}
-          <div className="glass-panel relative overflow-hidden px-4 py-4 sm:px-6 sm:py-5">
+          <div className="glass-panel relative w-full overflow-hidden px-4 py-4 sm:px-6 sm:py-5">
             <div className="pointer-events-none absolute inset-y-0 right-[-30%] w-1/2 rounded-full bg-emerald-500/15 blur-3xl" />
             <div className="pointer-events-none absolute inset-y-8 left-[-30%] w-1/2 rounded-full bg-sky-500/10 blur-3xl" />
 
@@ -510,7 +520,7 @@ const DashboardPage = () => {
           </div>
 
           {/* Bank Cards */}
-          <div className="space-y-3">
+          <div className="w-full space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Счета</p>
               <button
@@ -522,14 +532,14 @@ const DashboardPage = () => {
               </button>
             </div>
 
-            <div className="finhub-account-carousel md:grid md:grid-cols-2 md:gap-4 md:overflow-visible lg:grid-cols-3">
+            <div className="finhub-account-carousel max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:overflow-x-auto sm:grid sm:grid-cols-2 sm:gap-4 sm:overflow-visible lg:grid-cols-3">
               {connectedAccounts.map((account) => {
                 const bankMeta = getBankMeta(account.bank);
 
                 return (
                   <article
                     key={account.id}
-                    className="finhub-account-card glass-soft relative shrink-0 overflow-hidden p-4 md:min-h-0 md:min-w-0"
+                    className="finhub-account-card glass-soft relative shrink-0 overflow-hidden p-4 max-sm:min-w-[85vw] max-sm:snap-start sm:min-h-0 sm:min-w-0"
                   >
                     <div
                       className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${bankMeta.cardGradient}`}
@@ -567,7 +577,15 @@ const DashboardPage = () => {
             </div>
           </div>
 
-          <div className="glass-panel px-4 py-4 sm:px-6 sm:py-5">
+          <div className="max-sm:block sm:hidden">
+            <RecentTransactions
+              transactions={recentTransactions}
+              loading={recentTransactionsLoading}
+              onOpenAll={() => navigate('/transactions')}
+            />
+          </div>
+
+          <div className="hidden sm:block glass-panel px-4 py-4 sm:px-6 sm:py-5">
             <FrequentTransfersStrip
               title="Частые переводы"
               favorites={favoriteContacts}
@@ -582,7 +600,7 @@ const DashboardPage = () => {
         </section>
 
         {/* Right column */}
-        <section className="flex flex-col gap-5">
+        <section className="hidden sm:flex sm:flex-col sm:gap-5">
           {error && (
             <section className="glass-soft border border-red-400/40 bg-red-500/10 px-4 py-3 text-xs text-red-100">
               {error}

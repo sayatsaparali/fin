@@ -37,7 +37,7 @@ import {
   type StandardBankName
 } from '../lib/standardBanks';
 import { getAuthUserWithRetry } from '../lib/authSession';
-import { getSupabaseClient } from '../lib/supabaseClient';
+import { getSupabaseClient, isSchemaRelatedError } from '../lib/supabaseClient';
 import { pushUiToast } from '../lib/uiToast';
 import { fetchAccountsByProfileId, type UserAccount } from '../lib/accountsApi';
 
@@ -76,6 +76,7 @@ const formatCardValue = (input: string) =>
 
 type ProfileLookupRow = {
   id: string;
+  auth_user_id: string | null;
   imya: string | null;
   familiya: string | null;
   nomer_telefona: string | null;
@@ -98,6 +99,14 @@ const STANDARD_TRANSFER_BANK_OPTIONS: Array<{ id: BankId; name: StandardBankName
   { id: 'halyk', name: 'Halyk Bank' },
   { id: 'bcc', name: 'BCC Bank' }
 ];
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const toUuidOrNull = (value: string | null | undefined) => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return UUID_REGEX.test(normalized) ? normalized : null;
+};
 
 const fetchRecipientAccounts = async (
   supabase: ReturnType<typeof getSupabaseClient>,
@@ -155,9 +164,11 @@ const PaymentsPage = () => {
   const [favorites, setFavorites] = useState<FavoriteContact[]>([]);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
   const [ownPhoneDigits, setOwnPhoneDigits] = useState('');
   const [recipientName, setRecipientName] = useState<string | null>(null);
   const [recipientUserId, setRecipientUserId] = useState<string | null>(null);
+  const [recipientAuthUserId, setRecipientAuthUserId] = useState<string | null>(null);
   const [recipientAccounts, setRecipientAccounts] = useState<RecipientAccount[]>([]);
   const [recipientLookupError, setRecipientLookupError] = useState<string | null>(null);
   const [isRecipientLookupLoading, setIsRecipientLookupLoading] = useState(false);
@@ -226,6 +237,7 @@ const PaymentsPage = () => {
       try {
         setAccountsLoading(true);
         const user = await getAuthUserWithRetry(supabase);
+        setAuthUserId(toUuidOrNull(user.id));
         const currentProfileId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
         setProfileUserId(currentProfileId);
 
@@ -289,6 +301,7 @@ const PaymentsPage = () => {
         if (!isMounted) return;
         setRecipientName(null);
         setRecipientUserId(null);
+        setRecipientAuthUserId(null);
         setRecipientAccounts([]);
         setRecipientLookupError(null);
         return;
@@ -304,6 +317,7 @@ const PaymentsPage = () => {
           const fullName = `${profile.imya ?? ''} ${profile.familiya ?? ''}`.trim();
           setRecipientName(fullName || 'Получатель FinHub');
           setRecipientUserId(profile.id);
+          setRecipientAuthUserId(toUuidOrNull(profile.auth_user_id));
           setRecipientLookupError(null);
 
           await logRecipientAccountsDiagnostics(supabase, profile.id);
@@ -340,7 +354,7 @@ const PaymentsPage = () => {
         const searchPhoneE164 = toKzE164Phone(digits);
         const { data: exactProfile, error: exactProfileError } = await supabase
           .from('new_polzovateli')
-          .select('id, imya, familiya, nomer_telefona')
+          .select('id, auth_user_id, imya, familiya, nomer_telefona')
           .eq('nomer_telefona', searchPhoneE164)
           .maybeSingle();
 
@@ -354,7 +368,7 @@ const PaymentsPage = () => {
 
         const { data, error } = await supabase
           .from('new_polzovateli')
-          .select('id, imya, familiya, nomer_telefona')
+          .select('id, auth_user_id, imya, familiya, nomer_telefona')
           .not('nomer_telefona', 'is', null);
 
         if (error) throw error;
@@ -367,6 +381,7 @@ const PaymentsPage = () => {
         if (!matched) {
           setRecipientName(null);
           setRecipientUserId(null);
+          setRecipientAuthUserId(null);
           setRecipientAccounts([]);
           setRecipientLookupError('Пользователь с таким номером еще не зарегистрирован в FinHub');
           return;
@@ -377,6 +392,7 @@ const PaymentsPage = () => {
         // eslint-disable-next-line no-console
         console.error('Recipient lookup failed:', lookupError);
         if (!isMounted) return;
+        setRecipientAuthUserId(null);
         setRecipientLookupError('Ошибка поиска получателя. Попробуйте снова.');
         pushUiToast('Ошибка связи с базой при поиске получателя.', 'error');
       } finally {
@@ -395,6 +411,7 @@ const PaymentsPage = () => {
     if (method !== 'phone') {
       setRecipientName(null);
       setRecipientUserId(null);
+      setRecipientAuthUserId(null);
       setRecipientAccounts([]);
       setRecipientLookupError(null);
       setIsRecipientLookupLoading(false);
@@ -459,6 +476,7 @@ const PaymentsPage = () => {
     setError(null);
     setRecipientName(null);
     setRecipientUserId(null);
+    setRecipientAuthUserId(null);
     setRecipientAccounts([]);
     setRecipientLookupError(null);
 
@@ -598,35 +616,83 @@ const PaymentsPage = () => {
   };
 
   const createTransactionRecord = async (params: {
-    userId: string;
+    ownerId: string;
+    senderId: string;
+    recipientId: string;
     amount: number;
+    cleanAmount: number;
     description: string;
     counterparty: string;
     category: string;
     commission: number;
     bankName: string;
+    senderBank: string;
+    recipientBank: string;
     kind: 'income' | 'expense';
+    tip: 'plus' | 'minus';
+    balanceAfter?: number | null;
   }) => {
     const supabase = getSupabaseClient();
     if (!supabase) return;
 
+    const ownerUuid = toUuidOrNull(params.ownerId);
+    const senderUuid = toUuidOrNull(params.senderId);
+    const recipientUuid = toUuidOrNull(params.recipientId);
+    if (!ownerUuid || !senderUuid || !recipientUuid) {
+      throw new Error('Некорректный UUID для записи транзакции.');
+    }
+
     const nowIso = new Date().toISOString();
 
-    const { error: insertError } = await supabase.from('new_tranzakcii').insert({
-      user_id: params.userId,
-      amount: params.amount,
+    const primaryPayload = {
+      vladilec_id: ownerUuid,
+      otpravitel_id: senderUuid,
+      poluchatel_id: recipientUuid,
+      amount: normalizeMoneyValue(params.amount),
+      clean_amount: normalizeMoneyValue(params.cleanAmount),
       description: params.description,
       category: params.category,
       counterparty: params.counterparty,
-      commission: params.commission,
+      commission: normalizeMoneyValue(params.commission),
       bank: params.bankName,
+      otpravitel_bank: params.senderBank,
+      poluchatel_bank: params.recipientBank,
       type: params.kind,
+      tip: params.tip,
+      balance_after:
+        typeof params.balanceAfter === 'number' ? normalizeMoneyValue(params.balanceAfter) : null,
       date: nowIso
-    });
+    };
+
+    let { error: insertError } = await supabase.from('new_tranzakcii').insert(primaryPayload);
+
+    if (insertError && isSchemaRelatedError(insertError)) {
+      const fallbackPayload = {
+        vladilec_id: ownerUuid,
+        user_id: ownerUuid,
+        amount: normalizeMoneyValue(params.amount),
+        description: params.description,
+        category: params.category,
+        counterparty: params.counterparty,
+        commission: normalizeMoneyValue(params.commission),
+        bank: params.bankName,
+        sender_iin: senderUuid,
+        sender_bank: params.senderBank,
+        recipient_iin: recipientUuid,
+        recipient_bank: params.recipientBank,
+        clean_amount: normalizeMoneyValue(params.cleanAmount),
+        balance_after:
+          typeof params.balanceAfter === 'number' ? normalizeMoneyValue(params.balanceAfter) : null,
+        type: params.kind,
+        tip: params.tip,
+        date: nowIso
+      };
+      const fallback = await supabase.from('new_tranzakcii').insert(fallbackPayload);
+      insertError = fallback.error;
+    }
 
     if (insertError) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to insert transaction record:', insertError);
+      throw insertError;
     }
   };
 
@@ -669,7 +735,8 @@ const PaymentsPage = () => {
       const enteredPhoneDigits = phoneDigits;
       if (
         (ownPhoneDigits && enteredPhoneDigits === ownPhoneDigits) ||
-        (recipientUserId && profileUserId && recipientUserId === profileUserId)
+        (recipientUserId && profileUserId && recipientUserId === profileUserId) ||
+        (recipientAuthUserId && authUserId && recipientAuthUserId === authUserId)
       ) {
         setError('Нельзя перевести деньги самому себе по номеру телефона.');
         return;
@@ -677,6 +744,11 @@ const PaymentsPage = () => {
 
       if (!recipientUserId || !recipientName) {
         setError('Пользователь с таким номером не зарегистрирован в FinHub');
+        return;
+      }
+
+      if (!recipientAuthUserId) {
+        setError('У получателя не настроен аккаунт FinHub для приема перевода.');
         return;
       }
 
@@ -702,6 +774,10 @@ const PaymentsPage = () => {
     try {
       if (!profileUserId) {
         throw new Error('Не удалось определить пользователя для операции.');
+      }
+      const senderAuthUuid = toUuidOrNull(authUserId);
+      if (!senderAuthUuid) {
+        throw new Error('Не удалось определить UUID отправителя.');
       }
 
       const sourceNewBalance = sourceAccount.balance - totalDebit;
@@ -732,28 +808,46 @@ const PaymentsPage = () => {
         );
 
         await createTransactionRecord({
-          userId: profileUserId,
+          ownerId: senderAuthUuid,
+          senderId: senderAuthUuid,
+          recipientId: senderAuthUuid,
           amount: -totalDebit,
+          cleanAmount: normalizedAmountValue,
           description: `Перевод на свой счет ${destinationAccount.bank}`,
           counterparty: destinationAccount.bank,
           category: 'Переводы',
           commission: normalizedCommission,
           bankName: sourceAccount.bank,
-          kind: 'expense'
+          senderBank: sourceAccount.bank,
+          recipientBank: destinationAccount.bank,
+          kind: 'expense',
+          tip: 'minus',
+          balanceAfter: sourceNewBalance
         });
         await createTransactionRecord({
-          userId: profileUserId,
+          ownerId: senderAuthUuid,
+          senderId: senderAuthUuid,
+          recipientId: senderAuthUuid,
           amount: normalizedAmountValue,
+          cleanAmount: normalizedAmountValue,
           description: `Перевод со своего счета ${sourceAccount.bank}`,
           counterparty: sourceAccount.bank,
           category: 'Переводы',
           commission: 0,
           bankName: destinationAccount.bank,
-          kind: 'income'
+          senderBank: sourceAccount.bank,
+          recipientBank: destinationAccount.bank,
+          kind: 'income',
+          tip: 'plus',
+          balanceAfter: destinationNewBalance
         });
       } else if (method === 'phone') {
         // eslint-disable-next-line no-console
         console.log('Transfer recipient user_id:', recipientUserId);
+        const recipientUuid = toUuidOrNull(recipientAuthUserId);
+        if (!recipientUuid) {
+          throw new Error('Некорректный UUID получателя.');
+        }
 
         const { data: recipientAccountStrict, error: recipientAccountStrictError } = await supabase
           .from('new_scheta')
@@ -799,6 +893,41 @@ const PaymentsPage = () => {
             account.id === sourceAccount.id ? { ...account, balance: sourceNewBalance } : account
           )
         );
+
+        await createTransactionRecord({
+          ownerId: senderAuthUuid,
+          senderId: senderAuthUuid,
+          recipientId: recipientUuid,
+          amount: -totalDebit,
+          cleanAmount: normalizedAmountValue,
+          description: `Перевод пользователю ${recipientName ?? 'FinHub'}`,
+          counterparty: recipientName ?? toKzE164Phone(phoneDigits),
+          category: 'Переводы',
+          commission: normalizedCommission,
+          bankName: sourceAccount.bank,
+          senderBank: sourceAccount.bank,
+          recipientBank: selectedRecipientBankName,
+          kind: 'expense',
+          tip: 'minus',
+          balanceAfter: sourceNewBalance
+        });
+
+        await createTransactionRecord({
+          ownerId: recipientUuid,
+          senderId: senderAuthUuid,
+          recipientId: recipientUuid,
+          amount: normalizedAmountValue,
+          cleanAmount: normalizedAmountValue,
+          description: `Перевод от ${senderAuthUuid}`,
+          counterparty: sourceAccount.bank,
+          category: 'Переводы',
+          commission: 0,
+          bankName: selectedRecipientBankName,
+          senderBank: sourceAccount.bank,
+          recipientBank: selectedRecipientBankName,
+          kind: 'income',
+          tip: 'plus'
+        });
       } else {
         const { error: updateSourceError } = await supabase
           .from('new_scheta')
@@ -823,14 +952,21 @@ const PaymentsPage = () => {
             : `Перевод на карту ${cardNumber.replace(/\D/g, '').slice(-4)}`;
 
         await createTransactionRecord({
-          userId: profileUserId,
+          ownerId: senderAuthUuid,
+          senderId: senderAuthUuid,
+          recipientId: senderAuthUuid,
           amount: -totalDebit,
+          cleanAmount: normalizedAmountValue,
           description: transferDescription,
           counterparty: transferCounterparty,
           category: 'Переводы',
           commission: normalizedCommission,
           bankName: sourceAccount.bank,
-          kind: 'expense'
+          senderBank: sourceAccount.bank,
+          recipientBank: selectedRecipientBankName,
+          kind: 'expense',
+          tip: 'minus',
+          balanceAfter: sourceNewBalance
         });
       }
 

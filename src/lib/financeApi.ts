@@ -69,6 +69,7 @@ const asTextOrNull = (value: unknown): string | null => {
 type ResolvedUserIdentity = {
   profileId: string;
   iin: string;
+  authUserId: string;
 };
 
 const resolveCurrentUserIdentity = async (
@@ -96,7 +97,7 @@ const resolveCurrentUserIdentity = async (
     throw new Error('В new_polzovateli не найден профиль для текущего auth.user.id.');
   }
 
-  return { profileId, iin };
+  return { profileId, iin, authUserId };
 };
 
 export const fetchDashboardData = async (): Promise<DashboardData> => {
@@ -107,7 +108,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   }
 
   const user = await getAuthUserWithRetry(supabase);
-  const { profileId: profileUserId, iin: ownerIin } = await resolveCurrentUserIdentity(
+  const { profileId: profileUserId, iin: ownerIin, authUserId } = await resolveCurrentUserIdentity(
     supabase,
     user.id
   );
@@ -141,22 +142,28 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   let transactionsData: Array<Record<string, unknown>> | null = null;
   let txError: unknown = null;
 
-  try {
-    const primaryResult = await parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', ownerIin);
-    transactionsData = primaryResult.data as Array<Record<string, unknown>> | null;
-    txError = primaryResult.error;
+  const analyticsAttempts: Array<
+    () => ReturnType<typeof parseAnalyticsSelect>
+  > = [
+    () => parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', authUserId),
+    () => parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', ownerIin),
+    () => parseAnalyticsSelect('amount, type, date', 'user_id', profileUserId)
+  ];
 
-    if (txError && isSchemaRelatedError(txError as { code?: string; message?: string })) {
-      const fallbackResult = await parseAnalyticsSelect(
-        'amount, type, date',
-        'user_id',
-        profileUserId
-      );
-      transactionsData = fallbackResult.data as Array<Record<string, unknown>> | null;
-      txError = fallbackResult.error;
+  for (const attempt of analyticsAttempts) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await attempt();
+      if (result.error) {
+        txError = result.error;
+        continue;
+      }
+      transactionsData = result.data as Array<Record<string, unknown>> | null;
+      txError = null;
+      break;
+    } catch (analyticsError) {
+      txError = analyticsError;
     }
-  } catch (analyticsError) {
-    txError = analyticsError;
   }
 
   const normalizedTransactions: Array<{ amount: number; type: string; tip: string; occurredAt: string }> = [];
@@ -214,7 +221,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   if (!supabase) return [];
 
   const user = await getAuthUserWithRetry(supabase);
-  const { profileId: profileUserId, iin: ownerIin } = await resolveCurrentUserIdentity(
+  const { profileId: profileUserId, iin: ownerIin, authUserId } = await resolveCurrentUserIdentity(
     supabase,
     user.id
   );
@@ -272,26 +279,41 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
       .order('date', { ascending: false })
       .limit(120);
 
-  const baseSelect = 'id, vladilec_id, user_id, amount, description, category, counterparty, commission, bank, type, tip, date';
+  const uuidSelect =
+    'id, vladilec_id, amount, description, category, counterparty, commission, bank, type, tip, date, sender_iin:otpravitel_id, sender_bank:otpravitel_bank, recipient_iin:poluchatel_id, recipient_bank:poluchatel_bank, clean_amount, balance_after';
+  const baseSelect =
+    'id, vladilec_id, user_id, amount, description, category, counterparty, commission, bank, type, tip, date';
   const fallbackBaseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, date';
   const extendedSelect = `${baseSelect}, sender_iin, sender_bank, recipient_iin, recipient_bank, clean_amount, balance_after`;
 
-  let { data: transactionsData, error: txError } = await parseSelectResult(
-    extendedSelect,
-    'vladilec_id',
-    ownerIin
-  );
+  let transactionsData: unknown[] | null = null;
+  let txError: unknown = null;
 
-  if (txError && isSchemaRelatedError(txError)) {
-    const fallbackResult = await parseSelectResult(fallbackBaseSelect, 'user_id', profileUserId);
-    transactionsData = fallbackResult.data;
-    txError = fallbackResult.error;
+  const attempts: Array<() => ReturnType<typeof parseSelectResult>> = [
+    () => parseSelectResult(uuidSelect, 'vladilec_id', authUserId),
+    () => parseSelectResult(extendedSelect, 'vladilec_id', ownerIin),
+    () => parseSelectResult(fallbackBaseSelect, 'user_id', profileUserId)
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await attempt();
+      if (result.error) {
+        txError = result.error;
+        continue;
+      }
+      transactionsData = result.data as unknown[] | null;
+      txError = null;
+      break;
+    } catch (attemptError) {
+      txError = attemptError;
+    }
   }
 
   if (txError) throw txError;
 
-  // Привязка к владельцу счетов по profile.id (для таблицы new_scheta),
-  // а транзакции фильтруются по vladilec_id = IIN.
+  // Для расчета fallback-остатка берем счета по profile.id из new_scheta.
   // Здесь считаем остаток после операции, если balance_after не хранится в записи.
   const { data: accountsData, error: accountsError } = await supabase
     .from('new_scheta')
@@ -337,9 +359,10 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     const counterparty = asTextOrNull(txRecord.counterparty);
     const bank = asTextOrNull(txRecord.bank);
 
-    const senderIin = asTextOrNull(txRecord.sender_iin) ?? (kind === 'expense' ? ownerIin : null);
+    const senderIin =
+      asTextOrNull(txRecord.sender_iin) ?? (kind === 'expense' ? authUserId ?? ownerIin : null);
     const recipientIin =
-      asTextOrNull(txRecord.recipient_iin) ?? (kind === 'income' ? ownerIin : null);
+      asTextOrNull(txRecord.recipient_iin) ?? (kind === 'income' ? authUserId ?? ownerIin : null);
     const senderBank = asTextOrNull(txRecord.sender_bank) ?? (kind === 'expense' ? bank : null);
     const recipientBank = asTextOrNull(txRecord.recipient_bank) ?? (kind === 'income' ? bank : null);
 

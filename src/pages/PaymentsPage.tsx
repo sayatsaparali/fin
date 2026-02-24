@@ -39,15 +39,12 @@ import {
 import { getAuthUserWithRetry } from '../lib/authSession';
 import { getSupabaseClient } from '../lib/supabaseClient';
 import { pushUiToast } from '../lib/uiToast';
+import { fetchAccountsByProfileId, type UserAccount } from '../lib/accountsApi';
 
 type TransferMethod = 'own' | 'phone' | 'card';
 type TransferScreen = 'menu' | 'form' | 'success';
 
-type ConnectedAccount = {
-  id: string;
-  bank: string;
-  balance: number;
-};
+type ConnectedAccount = UserAccount;
 
 type TransferLocationState = {
   quickFavorite?: FavoriteContact;
@@ -101,29 +98,6 @@ const STANDARD_TRANSFER_BANK_OPTIONS: Array<{ id: BankId; name: StandardBankName
   { id: 'halyk', name: 'Halyk Bank' },
   { id: 'bcc', name: 'BCC Bank' }
 ];
-
-const fetchUserAccounts = async (
-  supabase: ReturnType<typeof getSupabaseClient>,
-  userId: string
-): Promise<ConnectedAccount[]> => {
-  if (!supabase) return [];
-
-  const { data: rows, error: fetchError } = await supabase
-    .from('new_scheta')
-    .select('id, nazvanie_banka, balans')
-    .eq('vladilec_id', userId)
-    .order('nazvanie_banka', { ascending: true });
-
-  if (fetchError) throw fetchError;
-
-  return (rows ?? []).map((row) => ({
-    id: String((row as { id?: string }).id ?? ''),
-    bank:
-      normalizeToStandardBankName((row as { nazvanie_banka?: string | null }).nazvanie_banka) ??
-      String((row as { nazvanie_banka?: string | null }).nazvanie_banka ?? 'Bank'),
-    balance: Number((row as { balans?: number | null }).balans ?? 0)
-  }));
-};
 
 const fetchRecipientAccounts = async (
   supabase: ReturnType<typeof getSupabaseClient>,
@@ -255,12 +229,14 @@ const PaymentsPage = () => {
         const currentProfileId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
         setProfileUserId(currentProfileId);
 
-        const normalized = await fetchUserAccounts(supabase, currentProfileId);
+        const normalized = await fetchAccountsByProfileId(supabase, currentProfileId);
         if (normalized.length === 0) {
           await ensureStandardAccountsForUser(user.id);
         }
         const normalizedAfterInit =
-          normalized.length > 0 ? normalized : await fetchUserAccounts(supabase, currentProfileId);
+          normalized.length > 0
+            ? normalized
+            : await fetchAccountsByProfileId(supabase, currentProfileId);
         if (!isMounted) return;
 
         setAccounts(normalizedAfterInit);

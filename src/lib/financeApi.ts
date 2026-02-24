@@ -1,5 +1,7 @@
 import { getSupabaseClient, isSchemaRelatedError } from './supabaseClient';
 import { getAuthUserWithRetry } from './authSession';
+import { resolveRequiredProfileIdByAuthUserId } from './profileIdentity';
+import { fetchAccountsByProfileId } from './accountsApi';
 
 export type DailyAnalyticsPoint = {
   name: string;
@@ -73,31 +75,22 @@ const resolveCurrentUserIdentity = async (
   supabase: NonNullable<ReturnType<typeof getSupabaseClient>>,
   authUserId: string
 ): Promise<ResolvedUserIdentity> => {
-  const parseProfileByAuthUser = async (selectClause: string) =>
-    supabase
-      .from('new_polzovateli')
-      .select(selectClause)
-      .eq('auth_user_id', authUserId)
-      .maybeSingle();
+  const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUserId);
+  let iin: string | null = profileId;
 
-  let { data: profileData, error: profileError } = await parseProfileByAuthUser('id, iin, auth_user_id');
+  const { data: profileData, error: profileError } = await supabase
+    .from('new_polzovateli')
+    .select('iin')
+    .eq('id', profileId)
+    .maybeSingle();
 
-  // Fallback для старых схем, где auth_user_id отсутствует или профиль хранится иначе.
-  if (profileError && isSchemaRelatedError(profileError)) {
-    const fallbackById = await supabase
-      .from('new_polzovateli')
-      .select('id, iin')
-      .eq('id', authUserId)
-      .maybeSingle();
-    profileData = fallbackById.data;
-    profileError = fallbackById.error;
+  if (profileError && !isSchemaRelatedError(profileError)) {
+    throw profileError;
   }
 
-  if (profileError) throw profileError;
-
-  const profileRecord = profileData as { id?: string | null; iin?: string | null } | null;
-  const profileId = asTextOrNull(profileRecord?.id);
-  const iin = asTextOrNull(profileRecord?.iin) ?? profileId;
+  if (!profileError) {
+    iin = asTextOrNull((profileData as { iin?: string | null } | null)?.iin) ?? profileId;
+  }
 
   if (!profileId || !iin) {
     throw new Error('В new_polzovateli не найден профиль для текущего auth.user.id.');
@@ -119,19 +112,11 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     user.id
   );
 
-  // 1. Счета из new_scheta
-  const { data: accountsData, error: accountsError } = await supabase
-    .from('new_scheta')
-    .select('id, nazvanie_banka, balans')
-    .eq('vladilec_id', profileUserId);
-
-  if (accountsError) throw accountsError;
-
-  const normalizedAccounts: DashboardAccount[] = (accountsData ?? []).map((acc) => ({
-    id: String(acc.id ?? crypto.randomUUID()),
-    bank: String((acc as { nazvanie_banka?: string }).nazvanie_banka ?? 'Bank account'),
-    balance: Number((acc as { balans?: number }).balans ?? 0)
-  }));
+  // 1. Счета из new_scheta (единая логика с PaymentsPage)
+  const normalizedAccounts: DashboardAccount[] = await fetchAccountsByProfileId(
+    supabase,
+    profileUserId
+  );
 
   const totalBalance = normalizedAccounts.reduce((acc, item) => acc + item.balance, 0);
 
@@ -153,16 +138,25 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
       .order('date', { ascending: false })
       .limit(200);
 
-  let { data: transactionsData, error: txError } = await parseAnalyticsSelect(
-    'amount, type, tip, date',
-    'vladilec_id',
-    ownerIin
-  );
+  let transactionsData: Array<Record<string, unknown>> | null = null;
+  let txError: unknown = null;
 
-  if (txError && isSchemaRelatedError(txError)) {
-    const fallbackResult = await parseAnalyticsSelect('amount, type, date', 'user_id', profileUserId);
-    transactionsData = fallbackResult.data;
-    txError = fallbackResult.error;
+  try {
+    const primaryResult = await parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', ownerIin);
+    transactionsData = primaryResult.data as Array<Record<string, unknown>> | null;
+    txError = primaryResult.error;
+
+    if (txError && isSchemaRelatedError(txError as { code?: string; message?: string })) {
+      const fallbackResult = await parseAnalyticsSelect(
+        'amount, type, date',
+        'user_id',
+        profileUserId
+      );
+      transactionsData = fallbackResult.data as Array<Record<string, unknown>> | null;
+      txError = fallbackResult.error;
+    }
+  } catch (analyticsError) {
+    txError = analyticsError;
   }
 
   const normalizedTransactions: Array<{ amount: number; type: string; tip: string; occurredAt: string }> = [];
@@ -172,10 +166,13 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
       normalizedTransactions.push({
         amount: Number(tx.amount ?? 0),
         type: String(tx.type ?? ''),
-        tip: String((tx as { tip?: string }).tip ?? ''),
+        tip: String(tx.tip ?? ''),
         occurredAt: String(tx.date ?? '')
       });
     }
+  } else {
+    // eslint-disable-next-line no-console
+    console.error('Dashboard analytics load failed. Returning accounts without analytics.', txError);
   }
 
   const analyticsMap: Record<string, DailyAnalyticsPoint> = {};

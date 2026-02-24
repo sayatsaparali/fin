@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
 import { useUser } from '../context/UserContext';
 import {
@@ -52,9 +52,32 @@ const formatDateTime = (value: string) => {
   }).format(date);
 };
 
+const formatErrorDetails = (error: unknown) => {
+  if (!error) return 'Неизвестная ошибка';
+  if (typeof error === 'string') return error;
+
+  const err = error as {
+    message?: string;
+    code?: string;
+    details?: string;
+    hint?: string;
+    status?: number;
+  };
+
+  const parts: string[] = [];
+  if (err.message) parts.push(err.message);
+  if (err.code) parts.push(`code: ${err.code}`);
+  if (typeof err.status === 'number') parts.push(`status: ${err.status}`);
+  if (err.details) parts.push(err.details);
+  if (err.hint) parts.push(`hint: ${err.hint}`);
+
+  return parts.join(' | ') || 'Неизвестная ошибка';
+};
+
 const DashboardPage = () => {
   const { user } = useUser();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -111,13 +134,14 @@ const DashboardPage = () => {
 
     const load = async () => {
       try {
+        setError(null);
         setLoading(true);
         const data = await fetchDashboardData();
         if (!isMounted) return;
         setDashboardData(data);
       } catch (e) {
         if (!isMounted) return;
-        setError('Не удалось загрузить данные дашборда.');
+        setError(`Не удалось загрузить данные дашборда. ${formatErrorDetails(e)}`);
         // eslint-disable-next-line no-console
         console.error(e);
       } finally {
@@ -194,6 +218,10 @@ const DashboardPage = () => {
     const handleAccountsUpdated = () => {
       load();
     };
+    const handleWindowFocus = () => {
+      load();
+      loadRecentTransactions();
+    };
     const handleFavoritesUpdated = () => {
       loadFavorites();
     };
@@ -203,14 +231,16 @@ const DashboardPage = () => {
     window.addEventListener('finhub:accounts-updated', handleAccountsUpdated);
     window.addEventListener('finhub:favorites-updated', handleFavoritesUpdated);
     window.addEventListener('finhub:transactions-updated', handleTransactionsUpdated);
+    window.addEventListener('focus', handleWindowFocus);
 
     return () => {
       isMounted = false;
       window.removeEventListener('finhub:accounts-updated', handleAccountsUpdated);
       window.removeEventListener('finhub:favorites-updated', handleFavoritesUpdated);
       window.removeEventListener('finhub:transactions-updated', handleTransactionsUpdated);
+      window.removeEventListener('focus', handleWindowFocus);
     };
-  }, [user?.email]);
+  }, [location.key, user?.email]);
 
   const greetingName = profileFirstName || 'пользователь FinHub';
 

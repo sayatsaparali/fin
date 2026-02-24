@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import { useLocation, useNavigate } from 'react-router-dom';
 import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
+import RecentTransactions from '../components/RecentTransactions';
 import { useUser } from '../context/UserContext';
 import {
   fetchDashboardData,
@@ -39,18 +40,6 @@ const formatCurrency = (value: number) =>
     currency: 'KZT',
     maximumFractionDigits: 0
   }).format(value);
-
-const formatDateTime = (value: string) => {
-  if (!value) return 'Дата не указана';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Дата не указана';
-  return new Intl.DateTimeFormat('ru-RU', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(date);
-};
 
 const formatErrorDetails = (error: unknown) => {
   if (!error) return 'Неизвестная ошибка';
@@ -305,8 +294,93 @@ const DashboardPage = () => {
     }
   };
 
+  const renderSmartPocket = (compactMobile = false) => (
+    <section
+      className={`glass-panel ${compactMobile ? 'px-4 py-4' : 'px-4 py-4 sm:px-6 sm:py-5'}`}
+    >
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.22em] text-slate-400">Smart Pocket</p>
+          <p className={`mt-1 font-medium text-slate-100 ${compactMobile ? 'text-sm' : 'text-sm sm:text-base'}`}>
+            Изолируйте деньги, которые нельзя потратить
+          </p>
+        </div>
+        <div className="pill bg-emerald-500/10 text-[11px] text-emerald-200">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          Изоляция до конца месяца
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs text-slate-400">Сумма к заморозке</p>
+            <p className={`mt-1 font-semibold text-slate-50 ${compactMobile ? 'text-3xl' : 'text-2xl'}`}>
+              {formatCurrency(smartPocket).replace('KZT', '₸')}
+            </p>
+          </div>
+          <div className="flex items-center gap-3 text-xs text-slate-400">
+            <div className="space-y-1">
+              <p>Рекомендуемый минимум</p>
+              <p className="font-medium text-slate-100">
+                {formatCurrency(200000).replace('KZT', '₸')}
+              </p>
+            </div>
+            <div className="h-8 w-px bg-slate-700/70" />
+            <div className="space-y-1">
+              <p>Риск перерасхода</p>
+              <p className="font-medium text-amber-300">Низкий</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <input
+            type="range"
+            min={50000}
+            max={1000000}
+            step={10000}
+            value={smartPocket}
+            onChange={(e) => setSmartPocket(Number(e.target.value))}
+            className={`w-full cursor-pointer appearance-none rounded-full bg-slate-800/80 accent-emerald-400 ${
+              compactMobile ? 'finhub-thumb-slider' : 'h-1.5'
+            }`}
+          />
+          <div className="flex items-center justify-between text-[11px] text-slate-500">
+            <span>₸50 000</span>
+            <span>₸1 000 000</span>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+            <span>Деньги будут недоступны до</span>
+            <span className="rounded-full bg-slate-800/80 px-2 py-0.5 font-medium text-slate-100">
+              30 апреля
+            </span>
+            <span>за исключением экстренных случаев</span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="min-h-11 flex-1 rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs font-medium text-slate-200 shadow-sm transition hover:border-slate-400 hover:bg-slate-800 sm:flex-none"
+            >
+              Сценарий расходов
+            </button>
+            <button
+              type="button"
+              className="min-h-11 flex-1 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 sm:flex-none"
+            >
+              Активировать изоляцию
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-4 px-4 py-6 sm:gap-6 sm:px-6 lg:px-8">
+    <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-[var(--fh-space-section)] px-[var(--fh-space-page-x)] py-[var(--fh-space-page-y)] sm:gap-6 sm:px-6 lg:px-8">
       <div className="pointer-events-none absolute inset-0 -z-10 opacity-70">
         <div className="absolute left-[-10%] top-[-10%] h-64 w-64 rounded-full bg-emerald-500/20 blur-3xl" />
         <div className="absolute right-[-10%] top-1/3 h-72 w-72 rounded-full bg-yellow-400/10 blur-3xl" />
@@ -314,7 +388,7 @@ const DashboardPage = () => {
       </div>
 
       {/* Header */}
-      <header className="glass-panel flex items-center justify-between px-4 py-3 sm:px-6 sm:py-4">
+      <header className="finhub-mobile-header glass-panel sticky top-0 z-20 -mx-[var(--fh-space-page-x)] flex items-center justify-between rounded-none border-x-0 border-t-0 px-4 pb-3 md:mx-0 md:rounded-[var(--fh-radius-panel)] md:border md:px-6 md:py-4 md:pt-4">
         <div className="flex items-center gap-3 sm:gap-4">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500/20 ring-2 ring-emerald-500/60">
             <span className="text-lg font-semibold text-emerald-300">S</span>
@@ -324,7 +398,7 @@ const DashboardPage = () => {
             {isProfileLoading ? (
               <span className="mt-1 inline-block h-5 w-44 animate-pulse rounded bg-slate-700/70 sm:h-6 sm:w-56" />
             ) : (
-              <p className="text-base font-semibold text-slate-50 sm:text-lg">
+              <p className="text-sm font-semibold text-slate-50 sm:text-lg">
                 {`Добро пожаловать, ${greetingName}!`}
               </p>
             )}
@@ -339,7 +413,7 @@ const DashboardPage = () => {
 
           <button
             type="button"
-            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-700/70 bg-slate-900/70 text-slate-200 shadow-md transition hover:border-slate-500 hover:bg-slate-800"
+            className="relative inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-700/70 bg-slate-900/70 text-slate-200 shadow-md transition hover:border-slate-500 hover:bg-slate-800"
           >
             <span className="absolute right-1.5 top-1.5 inline-flex h-1.5 w-1.5 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.9)]" />
             <span className="sr-only">Уведомления</span>
@@ -349,8 +423,8 @@ const DashboardPage = () => {
               fill="none"
               stroke="currentColor"
               strokeWidth="1.7"
-              className="h-4 w-4"
-            >
+                className="h-4 w-4"
+              >
               <path d="M8 10a4 4 0 1 1 8 0c0 2 .5 3.5 1 4.5.5 1 .5 1.5.5 1.5H6.5s0-.5.5-1.5 1-2.5 1-4.5Z" />
               <path d="M10 18a2 2 0 1 0 4 0" />
             </svg>
@@ -385,7 +459,7 @@ const DashboardPage = () => {
       )}
 
       {/* Layout grid */}
-      <main className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)]">
+      <main className="grid flex-1 gap-[var(--fh-space-section)] lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)]">
         {/* Left column */}
         <section className="flex flex-col gap-5">
           {/* Total Balance */}
@@ -448,14 +522,14 @@ const DashboardPage = () => {
               </button>
             </div>
 
-            <div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-1 md:grid md:grid-cols-2 md:overflow-visible lg:grid-cols-3">
+            <div className="finhub-account-carousel md:grid md:grid-cols-2 md:gap-4 md:overflow-visible lg:grid-cols-3">
               {connectedAccounts.map((account) => {
                 const bankMeta = getBankMeta(account.bank);
 
                 return (
                   <article
                     key={account.id}
-                    className="glass-soft relative min-w-[84vw] shrink-0 snap-start overflow-hidden p-4 md:min-w-0"
+                    className="finhub-account-card glass-soft relative shrink-0 overflow-hidden p-4 md:min-h-0 md:min-w-0"
                   >
                     <div
                       className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${bankMeta.cardGradient}`}
@@ -504,85 +578,7 @@ const DashboardPage = () => {
             />
           </div>
 
-          {/* Smart Pocket */}
-          <section className="glass-panel px-4 py-4 sm:px-6 sm:py-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-slate-400">Smart Pocket</p>
-                <p className="mt-1 text-sm font-medium text-slate-100 sm:text-base">
-                  Изолируйте деньги, которые нельзя потратить
-                </p>
-              </div>
-              <div className="pill bg-emerald-500/10 text-[11px] text-emerald-200">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                Изоляция до конца месяца
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <p className="text-xs text-slate-400">Сумма к заморозке</p>
-                  <p className="mt-1 text-2xl font-semibold text-slate-50">
-                    {formatCurrency(smartPocket).replace('KZT', '₸')}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-slate-400">
-                  <div className="space-y-1">
-                    <p>Рекомендуемый минимум</p>
-                    <p className="font-medium text-slate-100">
-                      {formatCurrency(200000).replace('KZT', '₸')}
-                    </p>
-                  </div>
-                  <div className="h-8 w-px bg-slate-700/70" />
-                  <div className="space-y-1">
-                    <p>Риск перерасхода</p>
-                    <p className="font-medium text-amber-300">Низкий</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <input
-                  type="range"
-                  min={50000}
-                  max={1000000}
-                  step={10000}
-                  value={smartPocket}
-                  onChange={(e) => setSmartPocket(Number(e.target.value))}
-                  className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-800/80 accent-emerald-400"
-                />
-                <div className="flex items-center justify-between text-[11px] text-slate-500">
-                  <span>₸50 000</span>
-                  <span>₸1 000 000</span>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                  <span>Деньги будут недоступны до</span>
-                  <span className="rounded-full bg-slate-800/80 px-2 py-0.5 font-medium text-slate-100">
-                    30 апреля
-                  </span>
-                  <span>за исключением экстренных случаев</span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="flex-1 rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs font-medium text-slate-200 shadow-sm transition hover:border-slate-400 hover:bg-slate-800 sm:flex-none"
-                  >
-                    Сценарий расходов
-                  </button>
-                  <button
-                    type="button"
-                    className="flex-1 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 sm:flex-none"
-                  >
-                    Активировать изоляцию
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
+          <div className="hidden lg:block">{renderSmartPocket(false)}</div>
         </section>
 
         {/* Right column */}
@@ -594,7 +590,7 @@ const DashboardPage = () => {
           )}
 
           {/* Analytics */}
-          <section className="glass-panel flex flex-1 flex-col px-4 py-4 sm:px-6 sm:py-5">
+          <section className="glass-panel hidden flex-1 flex-col px-4 py-4 sm:px-6 sm:py-5 lg:flex">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Аналитика</p>
@@ -689,71 +685,16 @@ const DashboardPage = () => {
             </div>
           </section>
 
-          <section className="glass-panel px-4 py-4 sm:px-5 sm:py-5">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Последние транзакции</p>
-              <button
-                type="button"
-                onClick={() => navigate('/transactions')}
-                className="text-xs text-emerald-300 transition hover:text-emerald-200"
-              >
-                Все операции
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              {recentTransactions.map((tx) => {
-                const label = tx.description ?? tx.counterparty ?? tx.category ?? 'Операция';
-                const isIncome = tx.kind === 'income';
-                const isExpense = tx.kind === 'expense';
-                const amountTone = isIncome
-                  ? 'text-emerald-300'
-                  : isExpense
-                    ? 'text-rose-300'
-                    : 'text-slate-200';
-                const amountPrefix = isIncome ? '+' : isExpense ? '-' : '';
-
-                return (
-                  <article
-                    key={tx.id}
-                    className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-2"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-medium text-slate-100">{label}</p>
-                        <p className="truncate text-[11px] text-slate-400">
-                          {formatDateTime(tx.date)}
-                          {tx.bank ? ` • ${tx.bank}` : ''}
-                          {tx.commission > 0
-                            ? ` • Комиссия ${formatCurrency(tx.commission).replace('KZT', '₸')}`
-                            : ''}
-                        </p>
-                      </div>
-                      <p className={`shrink-0 text-xs font-semibold ${amountTone}`}>
-                        {amountPrefix}
-                        {formatCurrency(Math.abs(tx.amount)).replace('KZT', '₸')}
-                      </p>
-                    </div>
-                  </article>
-                );
-              })}
-
-              {!recentTransactionsLoading && recentTransactions.length === 0 && (
-                <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
-                  Последние переводы появятся здесь после первой операции.
-                </p>
-              )}
-
-              {recentTransactionsLoading && (
-                <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
-                  Загрузка последних транзакций...
-                </p>
-              )}
-            </div>
-          </section>
+          <RecentTransactions
+            transactions={recentTransactions}
+            loading={recentTransactionsLoading}
+            onOpenAll={() => navigate('/transactions')}
+          />
 
         </section>
       </main>
+
+      <div className="finhub-safe-pb lg:hidden">{renderSmartPocket(true)}</div>
 
       {/* Merge funds modal */}
       <AnimatePresence>

@@ -61,7 +61,7 @@ const RootLayout = ({ children }: RootLayoutProps) => {
     <div
       className={`min-h-screen bg-slate-950 text-slate-50 ${
         showAppNavigation
-          ? `pb-20 md:pb-0 md:pl-20 ${isSidebarCollapsed ? 'lg:pl-20' : 'lg:pl-64'}`
+          ? `pb-[calc(5rem+var(--fh-safe-bottom))] md:pb-0 md:pl-20 ${isSidebarCollapsed ? 'lg:pl-20' : 'lg:pl-64'}`
           : ''
       }`}
     >

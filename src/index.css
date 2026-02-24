@@ -2,6 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --fh-safe-top: env(safe-area-inset-top, 0px);
+  --fh-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --fh-safe-left: env(safe-area-inset-left, 0px);
+  --fh-safe-right: env(safe-area-inset-right, 0px);
+
+  --fh-space-page-x: clamp(14px, 4vw, 24px);
+  --fh-space-page-y: clamp(14px, 4vw, 24px);
+  --fh-space-section: clamp(10px, 2.6vw, 20px);
+
+  --fh-radius-panel: 20px;
+  --fh-radius-card: 24px;
+  --fh-mobile-header-height: 72px;
+  --fh-mobile-card-width: min(86vw, 360px);
+  --fh-mobile-card-height: 188px;
+
+  --fh-color-panel-bg: rgba(15, 23, 42, 0.52);
+  --fh-color-panel-border: rgba(100, 116, 139, 0.38);
+  --fh-color-accent: #10b981;
+  --fh-color-danger: #f87171;
+}
+
 *,
 *::before,
 *::after {
@@ -17,13 +39,62 @@ body {
 
 .glass-panel {
   @apply bg-slate-900/50 border border-slate-700/60 shadow-glass backdrop-blur-xl rounded-2xl;
+  background-color: var(--fh-color-panel-bg);
+  border-color: var(--fh-color-panel-border);
+  border-radius: var(--fh-radius-panel);
 }
 
 .glass-soft {
   @apply bg-slate-900/40 border border-slate-700/40 shadow-lg backdrop-blur-lg rounded-2xl;
+  border-radius: calc(var(--fh-radius-panel) - 2px);
 }
 
 .pill {
   @apply inline-flex items-center gap-2 rounded-full border border-slate-700/70 bg-slate-900/60 px-3 py-1 text-xs font-medium text-slate-200 shadow-sm;
 }
 
+.finhub-safe-pt {
+  padding-top: var(--fh-safe-top);
+}
+
+.finhub-safe-pb {
+  padding-bottom: var(--fh-safe-bottom);
+}
+
+.finhub-mobile-header {
+  min-height: var(--fh-mobile-header-height);
+}
+
+.finhub-account-carousel {
+  -webkit-overflow-scrolling: touch;
+}
+
+.finhub-account-card {
+  border-radius: var(--fh-radius-card);
+}
+
+.finhub-thumb-slider {
+  height: 12px;
+}
+
+@media (max-width: 767px) {
+  .finhub-mobile-header {
+    padding-top: calc(var(--fh-safe-top) + 8px);
+    padding-left: calc(var(--fh-space-page-x) + var(--fh-safe-left));
+    padding-right: calc(var(--fh-space-page-x) + var(--fh-safe-right));
+  }
+
+  .finhub-account-carousel {
+    display: flex;
+    gap: var(--fh-space-section);
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding-bottom: 4px;
+  }
+
+  .finhub-account-card {
+    min-width: var(--fh-mobile-card-width);
+    min-height: var(--fh-mobile-card-height);
+    scroll-snap-align: start;
+  }
+}

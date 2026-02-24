@@ -30,6 +30,8 @@ import {
 import { getSupabaseClient } from '../lib/supabaseClient';
 import { getBankMeta } from '../lib/banks';
 import { STANDARD_BANK_NAMES, type StandardBankName } from '../lib/standardBanks';
+import { getAuthUserWithRetry } from '../lib/authSession';
+import { pushUiToast } from '../lib/uiToast';
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('ru-KZ', {
@@ -100,6 +102,11 @@ const DashboardPage = () => {
   }, [fromBank, toBank]);
 
   useEffect(() => {
+    if (!error) return;
+    pushUiToast(error, 'error');
+  }, [error]);
+
+  useEffect(() => {
     let isMounted = true;
 
     const load = async () => {
@@ -153,15 +160,7 @@ const DashboardPage = () => {
         setIsProfileLoading(true);
         const supabase = getSupabaseClient();
         if (!supabase) return;
-
-        const {
-          data: { user: authUser },
-          error: authError
-        } = await supabase.auth.getUser();
-
-        if (authError || !authUser) {
-          throw authError ?? new Error('Пользователь не найден.');
-        }
+        const authUser = await getAuthUserWithRetry(supabase);
 
         const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
 
@@ -237,14 +236,7 @@ const DashboardPage = () => {
 
     setIsCreatingBank(true);
     try {
-      const {
-        data: { user: authUser },
-        error: userError
-      } = await supabase.auth.getUser();
-
-      if (userError || !authUser) {
-        throw userError ?? new Error('Пользователь не найден.');
-      }
+      const authUser = await getAuthUserWithRetry(supabase);
 
       const currentUserId = await resolveRequiredProfileIdByAuthUserId(supabase, authUser.id);
 
@@ -420,18 +412,21 @@ const DashboardPage = () => {
               <button
                 type="button"
                 onClick={() => setIsAddBankModalOpen(true)}
-                className="rounded-xl border border-emerald-400/50 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                className="min-h-11 touch-manipulation rounded-xl border border-emerald-400/50 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
               >
                 + Открыть новый счет
               </button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-1 md:grid md:grid-cols-2 md:overflow-visible lg:grid-cols-3">
               {connectedAccounts.map((account) => {
                 const bankMeta = getBankMeta(account.bank);
 
                 return (
-                  <article key={account.id} className="glass-soft relative overflow-hidden p-4">
+                  <article
+                    key={account.id}
+                    className="glass-soft relative min-w-[84vw] shrink-0 snap-start overflow-hidden p-4 md:min-w-0"
+                  >
                     <div
                       className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${bankMeta.cardGradient}`}
                     />

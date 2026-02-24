@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRightLeft,
@@ -36,7 +36,9 @@ import {
   STANDARD_BANK_NAMES,
   type StandardBankName
 } from '../lib/standardBanks';
+import { getAuthUserWithRetry } from '../lib/authSession';
 import { getSupabaseClient } from '../lib/supabaseClient';
+import { pushUiToast } from '../lib/uiToast';
 
 type TransferMethod = 'own' | 'phone' | 'card';
 type TransferScreen = 'menu' | 'form' | 'success';
@@ -226,6 +228,20 @@ const PaymentsPage = () => {
     });
   };
 
+  const triggerTouchAction = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    action: () => void
+  ) => {
+    if (event.pointerType !== 'touch') return;
+    event.preventDefault();
+    action();
+  };
+
+  useEffect(() => {
+    if (!error) return;
+    pushUiToast(error, 'error');
+  }, [error]);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -235,14 +251,7 @@ const PaymentsPage = () => {
 
       try {
         setAccountsLoading(true);
-        const {
-          data: { user },
-          error: userError
-        } = await supabase.auth.getUser();
-
-        if (userError || !user) {
-          throw userError ?? new Error('Пользователь не найден.');
-        }
+        const user = await getAuthUserWithRetry(supabase);
         const currentProfileId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
         setProfileUserId(currentProfileId);
 
@@ -271,6 +280,8 @@ const PaymentsPage = () => {
       } catch (loadError) {
         // eslint-disable-next-line no-console
         console.error('Failed to load accounts for transfers:', loadError);
+        if (!isMounted) return;
+        setError('Ошибка связи с базой. Не удалось загрузить счета.');
       } finally {
         if (isMounted) setAccountsLoading(false);
       }
@@ -391,6 +402,7 @@ const PaymentsPage = () => {
         console.error('Recipient lookup failed:', lookupError);
         if (!isMounted) return;
         setRecipientLookupError('Ошибка поиска получателя. Попробуйте снова.');
+        pushUiToast('Ошибка связи с базой при поиске получателя.', 'error');
       } finally {
         if (isMounted) setIsRecipientLookupLoading(false);
       }
@@ -882,7 +894,16 @@ const PaymentsPage = () => {
     } catch (submitError) {
       // eslint-disable-next-line no-console
       console.error(submitError);
-      setError('Не удалось выполнить перевод. Проверьте данные и попробуйте снова.');
+      const rawMessage = String(
+        (submitError as { message?: string } | null)?.message ?? ''
+      ).toLowerCase();
+      if (rawMessage.includes('recipient') && rawMessage.includes('not found')) {
+        setError('Счет получателя не найден.');
+      } else if (rawMessage.includes('network') || rawMessage.includes('fetch')) {
+        setError('Ошибка связи с базой. Проверьте интернет и попробуйте снова.');
+      } else {
+        setError('Не удалось выполнить перевод. Проверьте данные и попробуйте снова.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -907,7 +928,8 @@ const PaymentsPage = () => {
           <button
             type="button"
             onClick={() => setIsQrOpen(true)}
-            className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400"
+            onPointerDown={(event) => triggerTouchAction(event, () => setIsQrOpen(true))}
+            className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400"
           >
             <QrCode size={16} />
             FinHub QR
@@ -927,7 +949,8 @@ const PaymentsPage = () => {
                 <button
                   type="button"
                   onClick={() => openMethodForm('own')}
-                  className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
+                  onPointerDown={(event) => triggerTouchAction(event, () => openMethodForm('own'))}
+                  className="glass-soft flex min-h-14 touch-manipulation items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
                     <ArrowRightLeft size={18} />
@@ -940,7 +963,8 @@ const PaymentsPage = () => {
                 <button
                   type="button"
                   onClick={() => openMethodForm('phone')}
-                  className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
+                  onPointerDown={(event) => triggerTouchAction(event, () => openMethodForm('phone'))}
+                  className="glass-soft flex min-h-14 touch-manipulation items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-500/20 text-sky-300">
                     <ContactRound size={18} />
@@ -953,7 +977,8 @@ const PaymentsPage = () => {
                 <button
                   type="button"
                   onClick={() => openMethodForm('card')}
-                  className="glass-soft flex items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
+                  onPointerDown={(event) => triggerTouchAction(event, () => openMethodForm('card'))}
+                  className="glass-soft flex min-h-14 touch-manipulation items-center gap-3 p-4 text-left transition hover:border-emerald-400/40"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-300">
                     <CreditCard size={18} />
@@ -966,7 +991,8 @@ const PaymentsPage = () => {
                 <button
                   type="button"
                   onClick={() => setIsQrOpen(true)}
-                  className="flex items-center gap-3 rounded-2xl border border-emerald-400/50 bg-emerald-500/10 p-4 text-left transition hover:bg-emerald-500/15"
+                  onPointerDown={(event) => triggerTouchAction(event, () => setIsQrOpen(true))}
+                  className="flex min-h-14 touch-manipulation items-center gap-3 rounded-2xl border border-emerald-400/50 bg-emerald-500/10 p-4 text-left transition hover:bg-emerald-500/15"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
                     <QrCode size={18} />
@@ -1010,7 +1036,7 @@ const PaymentsPage = () => {
 
               <div className="space-y-2">
                 <label className="text-xs font-medium text-slate-300">Откуда</label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
                   {accounts.map((account) => {
                     const bankMeta = getBankMeta(account.bank);
                     return (
@@ -1018,10 +1044,14 @@ const PaymentsPage = () => {
                         key={account.id}
                         type="button"
                         onClick={() => setFromAccountId(account.id)}
-                        className={`flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${fromAccountId === account.id
-                          ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                          : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                          }`}
+                        onPointerDown={(event) =>
+                          triggerTouchAction(event, () => setFromAccountId(account.id))
+                        }
+                        className={`min-h-12 min-w-[78vw] shrink-0 snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
+                          fromAccountId === account.id
+                            ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                        }`}
                       >
                         <span className="inline-flex items-center gap-2">
                           <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
@@ -1040,7 +1070,7 @@ const PaymentsPage = () => {
               {method === 'own' && (
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-300">Куда</label>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
                     {accounts.map((account) => {
                       const bankMeta = getBankMeta(account.bank);
                       return (
@@ -1048,10 +1078,14 @@ const PaymentsPage = () => {
                           key={account.id}
                           type="button"
                           onClick={() => setToAccountId(account.id)}
-                          className={`flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${toAccountId === account.id
-                            ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                            }`}
+                          onPointerDown={(event) =>
+                            triggerTouchAction(event, () => setToAccountId(account.id))
+                          }
+                          className={`min-h-12 min-w-[78vw] shrink-0 snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
+                            toAccountId === account.id
+                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                          }`}
                         >
                           <span className="inline-flex items-center gap-2">
                             <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
@@ -1076,7 +1110,8 @@ const PaymentsPage = () => {
                         ref={phoneInputRef}
                         id="phone"
                         type="tel"
-                        inputMode="numeric"
+                        inputMode="tel"
+                        autoComplete="tel"
                         value={formatKzPhoneFromDigits(phoneDigits)}
                         onChange={(e) => setPhoneDigits(extractKzPhoneDigits(e.target.value))}
                         onFocus={keepPhoneCaretAfterPrefix}
@@ -1137,9 +1172,16 @@ const PaymentsPage = () => {
                               if (disableBankOption) return;
                               setRecipientBankId(bank.id);
                             }}
+                            onPointerDown={(event) =>
+                              triggerTouchAction(event, () => {
+                                if (disableBankOption) return;
+                                setRecipientBankId(bank.id);
+                              })
+                            }
                             disabled={disableBankOption}
-                            className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${optionTone} ${disableBankOption ? 'cursor-not-allowed opacity-60' : ''
-                              }`}
+                            className={`min-h-11 touch-manipulation flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${optionTone} ${
+                              disableBankOption ? 'cursor-not-allowed opacity-60' : ''
+                            }`}
                           >
                             <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
                               {bankMeta.logo}
@@ -1178,7 +1220,10 @@ const PaymentsPage = () => {
                             key={bank.id}
                             type="button"
                             onClick={() => setRecipientBankId(bank.id)}
-                            className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${recipientBankId === bank.id
+                            onPointerDown={(event) =>
+                              triggerTouchAction(event, () => setRecipientBankId(bank.id))
+                            }
+                            className={`min-h-11 touch-manipulation flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${recipientBankId === bank.id
                               ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
                               : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
                               }`}
@@ -1267,7 +1312,7 @@ const PaymentsPage = () => {
                   (method === 'own' && !destinationAccount) ||
                   insufficientFunds
                 }
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 hover:shadow-emerald-400/50 disabled:cursor-not-allowed disabled:bg-emerald-700/50"
+                className="inline-flex min-h-11 w-full touch-manipulation items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-emerald-950 shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 hover:shadow-emerald-400/50 disabled:cursor-not-allowed disabled:bg-emerald-700/50"
               >
                 <SendHorizontal size={16} />
                 {isSubmitting ? 'Отправка...' : 'Перевести'}
@@ -1303,7 +1348,7 @@ const PaymentsPage = () => {
                     type="button"
                     onClick={saveLastTransferToFavorites}
                     disabled={isSavingFavorite}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300/50 bg-amber-400/10 px-4 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex min-h-11 touch-manipulation items-center justify-center gap-2 rounded-xl border border-amber-300/50 bg-amber-400/10 px-4 py-2 text-sm font-medium text-amber-200 transition hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Star size={14} />
                     {isSavingFavorite ? 'Сохранение...' : 'Добавить в избранное'}
@@ -1312,7 +1357,7 @@ const PaymentsPage = () => {
                 <button
                   type="button"
                   onClick={() => navigate('/dashboard')}
-                  className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400"
+                  className="min-h-11 touch-manipulation rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400"
                 >
                   Вернуться на главную
                 </button>
@@ -1324,7 +1369,7 @@ const PaymentsPage = () => {
                     setLastTransferDraft(null);
                     setScreen('menu');
                   }}
-                  className="rounded-xl border border-slate-600 bg-slate-900/70 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-400"
+                  className="min-h-11 touch-manipulation rounded-xl border border-slate-600 bg-slate-900/70 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-400"
                 >
                   Новый перевод
                 </button>

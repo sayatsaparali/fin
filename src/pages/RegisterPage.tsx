@@ -729,7 +729,7 @@ const RegisterPage = () => {
                   ref={phoneInputRef}
                   id="phoneNumber"
                   type="tel"
-                  inputMode="numeric"
+                  inputMode="tel"
                   autoComplete="tel"
                   className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-emerald-500/50 focus:border-emerald-400 focus:ring-1"
                   value={formatKzPhoneFromDigits(phoneDigits)}

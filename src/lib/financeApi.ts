@@ -1,4 +1,5 @@
 import { getSupabaseClient, isSchemaRelatedError } from './supabaseClient';
+import { getAuthUserWithRetry } from './authSession';
 
 export type DailyAnalyticsPoint = {
   name: string;
@@ -112,14 +113,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     return buildFallbackData();
   }
 
-  const {
-    data: { user },
-    error: userError
-  } = await supabase.auth.getUser();
-
-  if (userError || !user) {
-    throw userError ?? new Error('Пользователь не найден.');
-  }
+  const user = await getAuthUserWithRetry(supabase);
   const { profileId: profileUserId, iin: ownerIin } = await resolveCurrentUserIdentity(
     supabase,
     user.id
@@ -222,14 +216,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const supabase = getSupabaseClient();
   if (!supabase) return [];
 
-  const {
-    data: { user },
-    error: userError
-  } = await supabase.auth.getUser();
-
-  if (userError || !user) {
-    throw userError ?? new Error('Пользователь не найден.');
-  }
+  const user = await getAuthUserWithRetry(supabase);
   const { profileId: profileUserId, iin: ownerIin } = await resolveCurrentUserIdentity(
     supabase,
     user.id

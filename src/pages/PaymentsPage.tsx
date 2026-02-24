@@ -874,16 +874,17 @@ const PaymentsPage = () => {
           return;
         }
 
-        const senderBankName =
-          normalizeToStandardBankName(sourceAccount.bank) ?? sourceAccount.bank;
+        const senderAuthUserForRpc = await getAuthUserWithRetry(supabase);
+        const senderUuidForRpc = toUuidOrNull(senderAuthUserForRpc.id);
+        if (!senderUuidForRpc) {
+          throw new Error('Не удалось определить UUID отправителя для RPC.');
+        }
 
         const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
-          p_sender_iin: profileUserId,
-          p_recipient_iin: recipientUserId,
+          p_sender_id: senderUuidForRpc,
+          p_receiver_phone: toKzE164Phone(phoneDigits),
           p_amount: normalizeMoneyValue(normalizedAmountValue),
-          p_fee: normalizeMoneyValue(normalizedCommission),
-          p_sender_bank: senderBankName,
-          p_recipient_bank: selectedRecipientBankName
+          p_bank_name: selectedRecipientBankName
         });
 
         if (transferRpcError) throw transferRpcError;
@@ -1006,15 +1007,42 @@ const PaymentsPage = () => {
     } catch (submitError) {
       // eslint-disable-next-line no-console
       console.error(submitError);
+      const typedError = submitError as {
+        message?: string;
+        details?: string;
+        hint?: string;
+        status?: number;
+        code?: string;
+      } | null;
+      const statusCode = Number(typedError?.status ?? 0);
+      const dbErrorText = [typedError?.message, typedError?.details, typedError?.hint]
+        .filter((part) => String(part ?? '').trim().length > 0)
+        .join(' | ');
       const rawMessage = String(
         (submitError as { message?: string } | null)?.message ?? ''
       ).toLowerCase();
-      if (rawMessage.includes('recipient') && rawMessage.includes('not found')) {
+      if (statusCode === 400 || statusCode === 500) {
+        const message = dbErrorText || `Ошибка базы данных (HTTP ${statusCode})`;
+        setError(message);
+        pushUiToast(message, 'error');
+      } else if (
+        rawMessage.includes('operator does not exist') ||
+        rawMessage.includes('uuid') ||
+        rawMessage.includes('rpc')
+      ) {
+        const message = dbErrorText || 'Ошибка базы данных при выполнении перевода.';
+        setError(message);
+        pushUiToast(message, 'error');
+      } else if (rawMessage.includes('recipient') && rawMessage.includes('not found')) {
         setError('Счет получателя не найден.');
       } else if (rawMessage.includes('network') || rawMessage.includes('fetch')) {
-        setError('Ошибка связи с базой. Проверьте интернет и попробуйте снова.');
+        const message = 'Ошибка связи с базой. Проверьте интернет и попробуйте снова.';
+        setError(message);
+        pushUiToast(message, 'error');
       } else {
-        setError('Не удалось выполнить перевод. Проверьте данные и попробуйте снова.');
+        const message = dbErrorText || 'Не удалось выполнить перевод. Проверьте данные и попробуйте снова.';
+        setError(message);
+        pushUiToast(message, 'error');
       }
     } finally {
       setIsSubmitting(false);

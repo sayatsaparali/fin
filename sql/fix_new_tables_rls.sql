@@ -149,7 +149,7 @@ DROP POLICY IF EXISTS "Allow insert via profile" ON new_tranzakcii;
 CREATE POLICY "Allow read via profile"
   ON new_tranzakcii FOR SELECT
   USING (
-    user_id IN (
+    vladilec_id IN (
       SELECT id FROM new_polzovateli WHERE auth_user_id = auth.uid()
     )
   );

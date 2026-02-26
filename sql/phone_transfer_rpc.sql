@@ -1,5 +1,8 @@
--- FinHub: execute_phone_transfer (8 params, TEXT IDs, new tables only)
--- NOTE: new_tranzakcii insert uses vladilec_id/sender_iin/recipient_iin (no user_id).
+-- FinHub: execute_phone_transfer
+-- Uses only columns declared in src/types/supabase.ts:
+-- new_scheta: id, vladilec_id, nazvanie_banka, balans
+-- new_tranzakcii: vladilec_id, amount, clean_amount, description, category,
+--                 counterparty, commission, bank, type, tip, date, balance_after
 
 -- Ensure technical system user exists.
 insert into public.new_polzovateli (id, auth_user_id, imya, familiya, nomer_telefona)
@@ -24,7 +27,7 @@ set
   vladilec_id = excluded.vladilec_id,
   nazvanie_banka = excluded.nazvanie_banka;
 
--- Drop all old overloads/signatures.
+-- Drop old overloads/signatures.
 do $$
 declare
   v_signature text;
@@ -57,11 +60,17 @@ set search_path = public
 as $$
 declare
   v_sender_balance numeric;
+  v_sender_new_balance numeric;
   v_sender_bank text;
+
+  v_recipient_balance numeric;
+  v_recipient_new_balance numeric;
   v_recipient_bank text;
+
   v_total_debit numeric;
   v_system_account_id constant text := 'finhub_system-FEE';
   v_system_user_id constant text := 'finhub_system';
+  v_system_new_balance numeric;
 begin
   if nullif(trim(p_sender_user_id), '') is null
      or nullif(trim(p_recipient_user_id), '') is null then
@@ -87,7 +96,7 @@ begin
 
   v_total_debit := p_amount + p_commission;
 
-  -- Self-healing in case the system account was deleted.
+  -- Self-healing: recreate system account if deleted.
   insert into public.new_scheta (id, vladilec_id, nazvanie_banka, balans)
   values (v_system_account_id, v_system_user_id, 'FinHub System', 0)
   on conflict (id) do update
@@ -106,8 +115,8 @@ begin
     raise exception 'Sender account not found';
   end if;
 
-  select s.nazvanie_banka
-  into v_recipient_bank
+  select s.balans, s.nazvanie_banka
+  into v_recipient_balance, v_recipient_bank
   from public.new_scheta s
   where s.id = p_recipient_account_id
     and s.vladilec_id = p_recipient_user_id
@@ -131,33 +140,32 @@ begin
     raise exception 'Insufficient funds';
   end if;
 
-  -- 1) Sender balance: amount + commission
+  -- 1) sender: amount + commission
   update public.new_scheta
   set balans = balans - v_total_debit
   where id = p_sender_account_id
-    and vladilec_id = p_sender_user_id;
+    and vladilec_id = p_sender_user_id
+  returning balans into v_sender_new_balance;
 
-  -- 2) Recipient balance: amount
+  -- 2) recipient: transfer amount
   update public.new_scheta
   set balans = balans + p_amount
   where id = p_recipient_account_id
-    and vladilec_id = p_recipient_user_id;
+    and vladilec_id = p_recipient_user_id
+  returning balans into v_recipient_new_balance;
 
-  -- 3) System balance: commission
+  -- 3) system: commission
   if p_commission > 0 then
     update public.new_scheta
     set balans = balans + p_commission
     where id = v_system_account_id
-      and vladilec_id = v_system_user_id;
+      and vladilec_id = v_system_user_id
+    returning balans into v_system_new_balance;
   end if;
 
-  -- Sender transaction (expense)
+  -- Sender transaction
   insert into public.new_tranzakcii (
     vladilec_id,
-    sender_iin,
-    sender_bank,
-    recipient_iin,
-    recipient_bank,
     amount,
     clean_amount,
     description,
@@ -167,33 +175,27 @@ begin
     bank,
     type,
     tip,
+    balance_after,
     date
   )
   values (
     p_sender_user_id,
-    p_sender_user_id,
-    coalesce(v_sender_bank, 'Bank'),
-    p_recipient_user_id,
-    coalesce(v_recipient_bank, 'Bank'),
     -v_total_debit,
     p_amount,
     'Перевод по номеру телефона',
     'Переводы',
     coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
     p_commission,
-    coalesce(v_sender_bank, 'Bank'),
+    coalesce(v_sender_bank, 'Kaspi Bank'),
     'expense',
     'minus',
+    v_sender_new_balance,
     now()
   );
 
-  -- Recipient transaction (income)
+  -- Recipient transaction
   insert into public.new_tranzakcii (
     vladilec_id,
-    sender_iin,
-    sender_bank,
-    recipient_iin,
-    recipient_bank,
     amount,
     clean_amount,
     description,
@@ -203,14 +205,11 @@ begin
     bank,
     type,
     tip,
+    balance_after,
     date
   )
   values (
     p_recipient_user_id,
-    p_sender_user_id,
-    coalesce(v_sender_bank, 'Bank'),
-    p_recipient_user_id,
-    coalesce(v_recipient_bank, 'Bank'),
     p_amount,
     p_amount,
     coalesce(
@@ -220,20 +219,17 @@ begin
     'Переводы',
     coalesce(nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
     0,
-    coalesce(v_recipient_bank, 'Bank'),
+    coalesce(v_recipient_bank, 'Kaspi Bank'),
     'income',
     'plus',
+    v_recipient_new_balance,
     now()
   );
 
-  -- System commission transaction (income)
+  -- System commission transaction (audit)
   if p_commission > 0 then
     insert into public.new_tranzakcii (
       vladilec_id,
-      sender_iin,
-      sender_bank,
-      recipient_iin,
-      recipient_bank,
       amount,
       clean_amount,
       description,
@@ -243,23 +239,21 @@ begin
       bank,
       type,
       tip,
+      balance_after,
       date
     )
     values (
       v_system_user_id,
-      p_sender_user_id,
-      coalesce(v_sender_bank, 'Bank'),
-      v_system_user_id,
-      'FinHub System',
       p_commission,
       p_commission,
       'Комиссия за перевод',
       'Комиссии',
       coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод FinHub'),
       0,
-      'FinHub System',
+      coalesce(v_sender_bank, 'Kaspi Bank'),
       'income',
       'plus',
+      v_system_new_balance,
       now()
     );
   end if;

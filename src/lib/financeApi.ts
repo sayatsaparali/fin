@@ -23,7 +23,7 @@ export type DashboardAccount = {
 
 export type DashboardTransaction = {
   id: string;
-  userId: string | null;
+  vladilecId: string | null;
   tip: 'plus' | 'minus' | 'other';
   amount: number;
   cleanAmount: number;
@@ -368,7 +368,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
     result.push({
       id: String(txRecord.id ?? crypto.randomUUID()),
-      userId: asTextOrNull(txRecord.vladilec_id),
+      vladilecId: asTextOrNull(txRecord.vladilec_id),
       tip,
       amount,
       cleanAmount,

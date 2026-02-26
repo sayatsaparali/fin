@@ -677,7 +677,6 @@ const PaymentsPage = () => {
     if (insertError && isSchemaRelatedError(insertError)) {
       const fallbackPayload = {
         vladilec_id: ownerId,
-        user_id: ownerId,
         amount: normalizeMoneyValue(params.amount),
         description: params.description,
         category: params.category,
@@ -847,7 +846,7 @@ const PaymentsPage = () => {
         });
       } else if (method === 'phone') {
         // eslint-disable-next-line no-console
-        console.log('Transfer recipient user_id:', recipientUserId);
+        console.log('Transfer recipient profile id:', recipientUserId);
         if (!recipientUserId) {
           throw new Error('Некорректный ID получателя.');
         }

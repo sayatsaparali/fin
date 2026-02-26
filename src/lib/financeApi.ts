@@ -92,7 +92,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   }
 
   const user = await getAuthUserWithRetry(supabase);
-  const { profileId: profileUserId, authUserId } = await resolveCurrentUserIdentity(
+  const { profileId: profileUserId } = await resolveCurrentUserIdentity(
     supabase,
     user.id
   );
@@ -112,7 +112,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
 
   const parseAnalyticsSelect = async (
     selectClause: string,
-    ownerColumn: 'vladilec_id' | 'user_id',
+    ownerColumn: 'vladilec_id',
     ownerValue: string
   ) =>
     supabase
@@ -130,7 +130,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
     () => ReturnType<typeof parseAnalyticsSelect>
   > = [
       () => parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', profileUserId),
-      () => parseAnalyticsSelect('amount, type, date', 'user_id', profileUserId)
+      () => parseAnalyticsSelect('amount, type, date', 'vladilec_id', profileUserId)
     ];
 
   for (const attempt of analyticsAttempts) {
@@ -204,7 +204,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   if (!supabase) return [];
 
   const user = await getAuthUserWithRetry(supabase);
-  const { profileId: profileUserId, authUserId } = await resolveCurrentUserIdentity(
+  const { profileId: profileUserId } = await resolveCurrentUserIdentity(
     supabase,
     user.id
   );
@@ -251,7 +251,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
   const parseSelectResult = async (
     selectClause: string,
-    ownerColumn: 'vladilec_id' | 'user_id',
+    ownerColumn: 'vladilec_id',
     ownerValue: string
   ) =>
     supabase
@@ -265,8 +265,9 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const uuidSelect =
     'id, vladilec_id, amount, description, category, counterparty, commission, bank, type, tip, date, sender_iin:otpravitel_id, sender_bank:otpravitel_bank, recipient_iin:poluchatel_id, recipient_bank:poluchatel_bank, clean_amount, balance_after';
   const baseSelect =
-    'id, vladilec_id, user_id, amount, description, category, counterparty, commission, bank, type, tip, date';
-  const fallbackBaseSelect = 'id, user_id, amount, description, category, counterparty, commission, bank, type, date';
+    'id, vladilec_id, amount, description, category, counterparty, commission, bank, type, tip, date';
+  const fallbackBaseSelect =
+    'id, vladilec_id, amount, description, category, counterparty, commission, bank, type, date';
   const extendedSelect = `${baseSelect}, sender_iin, sender_bank, recipient_iin, recipient_bank, clean_amount, balance_after`;
 
   let transactionsData: unknown[] | null = null;
@@ -275,7 +276,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   const attempts: Array<() => ReturnType<typeof parseSelectResult>> = [
     () => parseSelectResult(uuidSelect, 'vladilec_id', profileUserId),
     () => parseSelectResult(extendedSelect, 'vladilec_id', profileUserId),
-    () => parseSelectResult(fallbackBaseSelect, 'user_id', profileUserId)
+    () => parseSelectResult(fallbackBaseSelect, 'vladilec_id', profileUserId)
   ];
 
   for (const attempt of attempts) {
@@ -367,7 +368,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
     result.push({
       id: String(txRecord.id ?? crypto.randomUUID()),
-      userId: asTextOrNull(txRecord.vladilec_id) ?? asTextOrNull(txRecord.user_id),
+      userId: asTextOrNull(txRecord.vladilec_id),
       tip,
       amount,
       cleanAmount,

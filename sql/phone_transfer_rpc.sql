@@ -1,33 +1,5 @@
--- FinHub: execute_phone_transfer
--- Uses only columns declared in src/types/supabase.ts:
--- new_scheta: id, vladilec_id, nazvanie_banka, balans
--- new_tranzakcii: vladilec_id, amount, clean_amount, description, category,
---                 counterparty, commission, bank, type, tip, date, balance_after
+-- FinHub: execute_phone_transfer (TEXT IDs, 8 params)
 
--- Ensure technical system user exists.
-insert into public.new_polzovateli (id, auth_user_id, imya, familiya, nomer_telefona)
-values (
-  'finhub_system',
-  '00000000-0000-0000-0000-000000000001',
-  'FinHub',
-  'System',
-  null
-)
-on conflict (id) do update
-set
-  auth_user_id = coalesce(public.new_polzovateli.auth_user_id, excluded.auth_user_id),
-  imya = coalesce(public.new_polzovateli.imya, excluded.imya),
-  familiya = coalesce(public.new_polzovateli.familiya, excluded.familiya);
-
--- Ensure technical commission account exists.
-insert into public.new_scheta (id, vladilec_id, nazvanie_banka, balans)
-values ('finhub_system-FEE', 'finhub_system', 'FinHub System', 0)
-on conflict (id) do update
-set
-  vladilec_id = excluded.vladilec_id,
-  nazvanie_banka = excluded.nazvanie_banka;
-
--- Drop old overloads/signatures.
 do $$
 declare
   v_signature text;
@@ -59,6 +31,10 @@ security definer
 set search_path = public
 as $$
 declare
+  v_system_user_id constant text := 'finhub_system';
+  v_system_auth_user_id constant text := 'finhub_system_auth';
+  v_system_account_id constant text := 'finhub_system-FEE';
+
   v_sender_balance numeric;
   v_sender_new_balance numeric;
   v_sender_bank text;
@@ -67,10 +43,8 @@ declare
   v_recipient_new_balance numeric;
   v_recipient_bank text;
 
-  v_total_debit numeric;
-  v_system_account_id constant text := 'finhub_system-FEE';
-  v_system_user_id constant text := 'finhub_system';
   v_system_new_balance numeric;
+  v_total_debit numeric;
 begin
   if nullif(trim(p_sender_user_id), '') is null
      or nullif(trim(p_recipient_user_id), '') is null then
@@ -96,13 +70,15 @@ begin
 
   v_total_debit := p_amount + p_commission;
 
-  -- Self-healing: recreate system account if deleted.
+  -- Ensure system user exists.
+  insert into public.new_polzovateli (id, auth_user_id, imya, familiya, nomer_telefona)
+  values (v_system_user_id, v_system_auth_user_id, 'FinHub', 'System', null)
+  on conflict (id) do nothing;
+
+  -- Ensure system account exists.
   insert into public.new_scheta (id, vladilec_id, nazvanie_banka, balans)
   values (v_system_account_id, v_system_user_id, 'FinHub System', 0)
-  on conflict (id) do update
-  set
-    vladilec_id = excluded.vladilec_id,
-    nazvanie_banka = excluded.nazvanie_banka;
+  on conflict (id) do nothing;
 
   select s.balans, s.nazvanie_banka
   into v_sender_balance, v_sender_bank
@@ -140,21 +116,21 @@ begin
     raise exception 'Insufficient funds';
   end if;
 
-  -- 1) sender: amount + commission
+  -- 1) Sender: amount + commission
   update public.new_scheta
   set balans = balans - v_total_debit
   where id = p_sender_account_id
     and vladilec_id = p_sender_user_id
   returning balans into v_sender_new_balance;
 
-  -- 2) recipient: transfer amount
+  -- 2) Recipient: amount
   update public.new_scheta
   set balans = balans + p_amount
   where id = p_recipient_account_id
     and vladilec_id = p_recipient_user_id
   returning balans into v_recipient_new_balance;
 
-  -- 3) system: commission
+  -- 3) System: commission
   if p_commission > 0 then
     update public.new_scheta
     set balans = balans + p_commission
@@ -163,7 +139,7 @@ begin
     returning balans into v_system_new_balance;
   end if;
 
-  -- Sender transaction
+  -- Sender transaction (required columns only)
   insert into public.new_tranzakcii (
     vladilec_id,
     amount,
@@ -193,7 +169,7 @@ begin
     now()
   );
 
-  -- Recipient transaction
+  -- Recipient transaction (required columns only)
   insert into public.new_tranzakcii (
     vladilec_id,
     amount,
@@ -226,7 +202,7 @@ begin
     now()
   );
 
-  -- System commission transaction (audit)
+  -- System commission transaction (required columns only)
   if p_commission > 0 then
     insert into public.new_tranzakcii (
       vladilec_id,

@@ -111,12 +111,9 @@ const STANDARD_TRANSFER_BANK_OPTIONS: Array<{ id: BankId; name: StandardBankName
   { id: 'bcc', name: 'BCC Bank' }
 ];
 
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const toUuidOrNull = (value: string | null | undefined) => {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  return UUID_REGEX.test(normalized) ? normalized : null;
+const toTextOrNull = (value: string | null | undefined) => {
+  const normalized = String(value ?? '').trim();
+  return normalized.length > 0 ? normalized : null;
 };
 
 const fetchRecipientAccounts = async (
@@ -248,7 +245,7 @@ const PaymentsPage = () => {
       try {
         setAccountsLoading(true);
         const user = await getAuthUserWithRetry(supabase);
-        setAuthUserId(toUuidOrNull(user.id));
+        setAuthUserId(toTextOrNull(user.id));
         const currentProfileId = await resolveRequiredProfileIdByAuthUserId(supabase, user.id);
         setProfileUserId(currentProfileId);
 
@@ -328,7 +325,7 @@ const PaymentsPage = () => {
           const fullName = `${profile.imya ?? ''} ${profile.familiya ?? ''}`.trim();
           setRecipientName(fullName || 'Получатель FinHub');
           setRecipientUserId(profile.id);
-          setRecipientAuthUserId(toUuidOrNull(profile.auth_user_id));
+          setRecipientAuthUserId(toTextOrNull(profile.auth_user_id));
           setRecipientLookupError(null);
 
           await logRecipientAccountsDiagnostics(supabase, profile.id);

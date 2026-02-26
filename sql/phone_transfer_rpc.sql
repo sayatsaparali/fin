@@ -1,8 +1,5 @@
--- FinHub: atomic phone transfer between users (new tables only)
--- Commission flow:
--- 1) sender debited by (amount + commission)
--- 2) recipient credited by amount
--- 3) system account credited by commission
+-- FinHub: execute_phone_transfer (8 params, TEXT IDs, new tables only)
+-- NOTE: new_tranzakcii insert uses vladilec_id/sender_iin/recipient_iin (no user_id).
 
 -- Ensure technical system user exists.
 insert into public.new_polzovateli (id, auth_user_id, imya, familiya, nomer_telefona)
@@ -27,7 +24,7 @@ set
   vladilec_id = excluded.vladilec_id,
   nazvanie_banka = excluded.nazvanie_banka;
 
--- Drop all old overloads/signatures of execute_phone_transfer.
+-- Drop all old overloads/signatures.
 do $$
 declare
   v_signature text;
@@ -90,7 +87,7 @@ begin
 
   v_total_debit := p_amount + p_commission;
 
-  -- Self-healing: recreate system account if deleted.
+  -- Self-healing in case the system account was deleted.
   insert into public.new_scheta (id, vladilec_id, nazvanie_banka, balans)
   values (v_system_account_id, v_system_user_id, 'FinHub System', 0)
   on conflict (id) do update
@@ -134,19 +131,19 @@ begin
     raise exception 'Insufficient funds';
   end if;
 
-  -- 1) sender: amount + commission
+  -- 1) Sender balance: amount + commission
   update public.new_scheta
   set balans = balans - v_total_debit
   where id = p_sender_account_id
     and vladilec_id = p_sender_user_id;
 
-  -- 2) recipient: transfer amount
+  -- 2) Recipient balance: amount
   update public.new_scheta
   set balans = balans + p_amount
   where id = p_recipient_account_id
     and vladilec_id = p_recipient_user_id;
 
-  -- 3) system: commission
+  -- 3) System balance: commission
   if p_commission > 0 then
     update public.new_scheta
     set balans = balans + p_commission
@@ -154,10 +151,13 @@ begin
       and vladilec_id = v_system_user_id;
   end if;
 
-  -- Sender transaction
+  -- Sender transaction (expense)
   insert into public.new_tranzakcii (
-    user_id,
     vladilec_id,
+    sender_iin,
+    sender_bank,
+    recipient_iin,
+    recipient_bank,
     amount,
     clean_amount,
     description,
@@ -165,10 +165,6 @@ begin
     counterparty,
     commission,
     bank,
-    sender_iin,
-    sender_bank,
-    recipient_iin,
-    recipient_bank,
     type,
     tip,
     date
@@ -176,26 +172,28 @@ begin
   values (
     p_sender_user_id,
     p_sender_user_id,
+    coalesce(v_sender_bank, 'Bank'),
+    p_recipient_user_id,
+    coalesce(v_recipient_bank, 'Bank'),
     -v_total_debit,
-    -p_amount,
+    p_amount,
     'Перевод по номеру телефона',
     'Переводы',
     coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
     p_commission,
     coalesce(v_sender_bank, 'Bank'),
-    p_sender_user_id,
-    coalesce(v_sender_bank, 'Bank'),
-    p_recipient_user_id,
-    coalesce(v_recipient_bank, 'Bank'),
     'expense',
     'minus',
     now()
   );
 
-  -- Recipient transaction
+  -- Recipient transaction (income)
   insert into public.new_tranzakcii (
-    user_id,
     vladilec_id,
+    sender_iin,
+    sender_bank,
+    recipient_iin,
+    recipient_bank,
     amount,
     clean_amount,
     description,
@@ -203,17 +201,16 @@ begin
     counterparty,
     commission,
     bank,
-    sender_iin,
-    sender_bank,
-    recipient_iin,
-    recipient_bank,
     type,
     tip,
     date
   )
   values (
     p_recipient_user_id,
+    p_sender_user_id,
+    coalesce(v_sender_bank, 'Bank'),
     p_recipient_user_id,
+    coalesce(v_recipient_bank, 'Bank'),
     p_amount,
     p_amount,
     coalesce(
@@ -224,20 +221,19 @@ begin
     coalesce(nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
     0,
     coalesce(v_recipient_bank, 'Bank'),
-    p_sender_user_id,
-    coalesce(v_sender_bank, 'Bank'),
-    p_recipient_user_id,
-    coalesce(v_recipient_bank, 'Bank'),
     'income',
     'plus',
     now()
   );
 
-  -- System commission transaction (audit)
+  -- System commission transaction (income)
   if p_commission > 0 then
     insert into public.new_tranzakcii (
-      user_id,
       vladilec_id,
+      sender_iin,
+      sender_bank,
+      recipient_iin,
+      recipient_bank,
       amount,
       clean_amount,
       description,
@@ -245,27 +241,22 @@ begin
       counterparty,
       commission,
       bank,
-      sender_iin,
-      sender_bank,
-      recipient_iin,
-      recipient_bank,
       type,
       tip,
       date
     )
     values (
       v_system_user_id,
+      p_sender_user_id,
+      coalesce(v_sender_bank, 'Bank'),
       v_system_user_id,
+      'FinHub System',
       p_commission,
       p_commission,
       'Комиссия за перевод',
       'Комиссии',
       coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод FinHub'),
       0,
-      'FinHub System',
-      p_sender_user_id,
-      coalesce(v_sender_bank, 'Bank'),
-      v_system_user_id,
       'FinHub System',
       'income',
       'plus',

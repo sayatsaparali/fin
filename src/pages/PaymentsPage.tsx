@@ -635,19 +635,19 @@ const PaymentsPage = () => {
     const supabase = getSupabaseClient();
     if (!supabase) return;
 
-    const ownerUuid = toUuidOrNull(params.ownerId);
-    const senderUuid = toUuidOrNull(params.senderId);
-    const recipientUuid = toUuidOrNull(params.recipientId);
-    if (!ownerUuid || !senderUuid || !recipientUuid) {
-      throw new Error('Некорректный UUID для записи транзакции.');
+    const ownerId = params.ownerId?.trim();
+    const senderId = params.senderId?.trim();
+    const recipientId = params.recipientId?.trim();
+    if (!ownerId || !senderId || !recipientId) {
+      throw new Error('Некорректный ID для записи транзакции.');
     }
 
     const nowIso = new Date().toISOString();
 
     const primaryPayload = {
-      vladilec_id: ownerUuid,
-      otpravitel_id: senderUuid,
-      poluchatel_id: recipientUuid,
+      vladilec_id: ownerId,
+      otpravitel_id: senderId,
+      poluchatel_id: recipientId,
       amount: normalizeMoneyValue(params.amount),
       clean_amount: normalizeMoneyValue(params.cleanAmount),
       description: params.description,
@@ -668,17 +668,17 @@ const PaymentsPage = () => {
 
     if (insertError && isSchemaRelatedError(insertError)) {
       const fallbackPayload = {
-        vladilec_id: ownerUuid,
-        user_id: ownerUuid,
+        vladilec_id: ownerId,
+        user_id: ownerId,
         amount: normalizeMoneyValue(params.amount),
         description: params.description,
         category: params.category,
         counterparty: params.counterparty,
         commission: normalizeMoneyValue(params.commission),
         bank: params.bankName,
-        sender_iin: senderUuid,
+        sender_iin: senderId,
         sender_bank: params.senderBank,
-        recipient_iin: recipientUuid,
+        recipient_iin: recipientId,
         recipient_bank: params.recipientBank,
         clean_amount: normalizeMoneyValue(params.cleanAmount),
         balance_after:
@@ -775,10 +775,6 @@ const PaymentsPage = () => {
       if (!profileUserId) {
         throw new Error('Не удалось определить пользователя для операции.');
       }
-      const senderAuthUuid = toUuidOrNull(authUserId);
-      if (!senderAuthUuid) {
-        throw new Error('Не удалось определить UUID отправителя.');
-      }
 
       const sourceNewBalance = sourceAccount.balance - totalDebit;
 
@@ -808,9 +804,9 @@ const PaymentsPage = () => {
         );
 
         await createTransactionRecord({
-          ownerId: senderAuthUuid,
-          senderId: senderAuthUuid,
-          recipientId: senderAuthUuid,
+          ownerId: profileUserId,
+          senderId: profileUserId,
+          recipientId: profileUserId,
           amount: -totalDebit,
           cleanAmount: normalizedAmountValue,
           description: `Перевод на свой счет ${destinationAccount.bank}`,
@@ -825,9 +821,9 @@ const PaymentsPage = () => {
           balanceAfter: sourceNewBalance
         });
         await createTransactionRecord({
-          ownerId: senderAuthUuid,
-          senderId: senderAuthUuid,
-          recipientId: senderAuthUuid,
+          ownerId: profileUserId,
+          senderId: profileUserId,
+          recipientId: profileUserId,
           amount: normalizedAmountValue,
           cleanAmount: normalizedAmountValue,
           description: `Перевод со своего счета ${sourceAccount.bank}`,
@@ -844,9 +840,8 @@ const PaymentsPage = () => {
       } else if (method === 'phone') {
         // eslint-disable-next-line no-console
         console.log('Transfer recipient user_id:', recipientUserId);
-        const recipientUuid = toUuidOrNull(recipientAuthUserId);
-        if (!recipientUuid) {
-          throw new Error('Некорректный UUID получателя.');
+        if (!recipientUserId) {
+          throw new Error('Некорректный ID получателя.');
         }
 
         const { data: recipientAccountStrict, error: recipientAccountStrictError } = await supabase
@@ -874,61 +869,27 @@ const PaymentsPage = () => {
           return;
         }
 
-        const senderAuthUserForRpc = await getAuthUserWithRetry(supabase);
-        const senderUuidForRpc = toUuidOrNull(senderAuthUserForRpc.id);
-        if (!senderUuidForRpc) {
-          throw new Error('Не удалось определить UUID отправителя для RPC.');
-        }
-
+        // Call RPC with all 8 required parameters
         const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
-          p_sender_id: senderUuidForRpc,
-          p_receiver_phone: toKzE164Phone(phoneDigits),
+          p_sender_user_id: profileUserId,
+          p_sender_account_id: sourceAccount.id,
+          p_recipient_user_id: recipientUserId,
+          p_recipient_account_id: recipientAccountForPhone?.id ?? '',
           p_amount: normalizeMoneyValue(normalizedAmountValue),
-          p_bank_name: selectedRecipientBankName
+          p_commission: normalizedCommission,
+          p_sender_counterparty: recipientName ?? toKzE164Phone(phoneDigits),
+          p_recipient_counterparty: profileUserId
         });
 
         if (transferRpcError) throw transferRpcError;
 
+        // RPC already handles balance updates and transaction records,
+        // so we only update local state here.
         setAccounts((prev) =>
           prev.map((account) =>
             account.id === sourceAccount.id ? { ...account, balance: sourceNewBalance } : account
           )
         );
-
-        await createTransactionRecord({
-          ownerId: senderAuthUuid,
-          senderId: senderAuthUuid,
-          recipientId: recipientUuid,
-          amount: -totalDebit,
-          cleanAmount: normalizedAmountValue,
-          description: `Перевод пользователю ${recipientName ?? 'FinHub'}`,
-          counterparty: recipientName ?? toKzE164Phone(phoneDigits),
-          category: 'Переводы',
-          commission: normalizedCommission,
-          bankName: sourceAccount.bank,
-          senderBank: sourceAccount.bank,
-          recipientBank: selectedRecipientBankName,
-          kind: 'expense',
-          tip: 'minus',
-          balanceAfter: sourceNewBalance
-        });
-
-        await createTransactionRecord({
-          ownerId: recipientUuid,
-          senderId: senderAuthUuid,
-          recipientId: recipientUuid,
-          amount: normalizedAmountValue,
-          cleanAmount: normalizedAmountValue,
-          description: `Перевод от ${senderAuthUuid}`,
-          counterparty: sourceAccount.bank,
-          category: 'Переводы',
-          commission: 0,
-          bankName: selectedRecipientBankName,
-          senderBank: sourceAccount.bank,
-          recipientBank: selectedRecipientBankName,
-          kind: 'income',
-          tip: 'plus'
-        });
       } else {
         const { error: updateSourceError } = await supabase
           .from('new_scheta')
@@ -943,19 +904,13 @@ const PaymentsPage = () => {
           )
         );
 
-        const transferCounterparty =
-          method === 'phone'
-            ? recipientName ?? `Телефон ${phoneDigits.slice(-4)}`
-            : `Карта ${cardNumber.replace(/\D/g, '').slice(-4)}`;
-        const transferDescription =
-          method === 'phone'
-            ? `Перевод ${recipientName ?? `на номер ${formatKzPhoneFromDigits(phoneDigits)}`}`
-            : `Перевод на карту ${cardNumber.replace(/\D/g, '').slice(-4)}`;
+        const transferCounterparty = `Карта ${cardNumber.replace(/\D/g, '').slice(-4)}`;
+        const transferDescription = `Перевод на карту ${cardNumber.replace(/\D/g, '').slice(-4)}`;
 
         await createTransactionRecord({
-          ownerId: senderAuthUuid,
-          senderId: senderAuthUuid,
-          recipientId: senderAuthUuid,
+          ownerId: profileUserId,
+          senderId: profileUserId,
+          recipientId: profileUserId,
           amount: -totalDebit,
           cleanAmount: normalizedAmountValue,
           description: transferDescription,
@@ -1187,11 +1142,10 @@ const PaymentsPage = () => {
                         onPointerDown={(event) =>
                           triggerTouchAction(event, () => setFromAccountId(account.id))
                         }
-                        className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
-                          fromAccountId === account.id
-                            ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                        }`}
+                        className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${fromAccountId === account.id
+                          ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                          : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                          }`}
                       >
                         <span className="inline-flex items-center gap-2">
                           <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
@@ -1221,11 +1175,10 @@ const PaymentsPage = () => {
                           onPointerDown={(event) =>
                             triggerTouchAction(event, () => setToAccountId(account.id))
                           }
-                          className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
-                            toAccountId === account.id
-                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                          }`}
+                          className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${toAccountId === account.id
+                            ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                            }`}
                         >
                           <span className="inline-flex items-center gap-2">
                             <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
@@ -1319,9 +1272,8 @@ const PaymentsPage = () => {
                               })
                             }
                             disabled={disableBankOption}
-                            className={`min-h-11 touch-manipulation flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${optionTone} ${
-                              disableBankOption ? 'cursor-not-allowed opacity-60' : ''
-                            }`}
+                            className={`min-h-11 touch-manipulation flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${optionTone} ${disableBankOption ? 'cursor-not-allowed opacity-60' : ''
+                              }`}
                           >
                             <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
                               {bankMeta.logo}

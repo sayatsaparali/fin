@@ -68,7 +68,6 @@ const asTextOrNull = (value: unknown): string | null => {
 
 type ResolvedUserIdentity = {
   profileId: string;
-  iin: string;
   authUserId: string;
 };
 
@@ -77,27 +76,12 @@ const resolveCurrentUserIdentity = async (
   authUserId: string
 ): Promise<ResolvedUserIdentity> => {
   const profileId = await resolveRequiredProfileIdByAuthUserId(supabase, authUserId);
-  let iin: string | null = profileId;
 
-  const { data: profileData, error: profileError } = await supabase
-    .from('new_polzovateli')
-    .select('iin')
-    .eq('id', profileId)
-    .maybeSingle();
-
-  if (profileError && !isSchemaRelatedError(profileError)) {
-    throw profileError;
-  }
-
-  if (!profileError) {
-    iin = asTextOrNull((profileData as { iin?: string | null } | null)?.iin) ?? profileId;
-  }
-
-  if (!profileId || !iin) {
+  if (!profileId) {
     throw new Error('В new_polzovateli не найден профиль для текущего auth.user.id.');
   }
 
-  return { profileId, iin, authUserId };
+  return { profileId, authUserId };
 };
 
 export const fetchDashboardData = async (): Promise<DashboardData> => {
@@ -108,7 +92,7 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   }
 
   const user = await getAuthUserWithRetry(supabase);
-  const { profileId: profileUserId, iin: ownerIin, authUserId } = await resolveCurrentUserIdentity(
+  const { profileId: profileUserId, authUserId } = await resolveCurrentUserIdentity(
     supabase,
     user.id
   );
@@ -145,10 +129,9 @@ export const fetchDashboardData = async (): Promise<DashboardData> => {
   const analyticsAttempts: Array<
     () => ReturnType<typeof parseAnalyticsSelect>
   > = [
-    () => parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', authUserId),
-    () => parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', ownerIin),
-    () => parseAnalyticsSelect('amount, type, date', 'user_id', profileUserId)
-  ];
+      () => parseAnalyticsSelect('amount, type, tip, date', 'vladilec_id', profileUserId),
+      () => parseAnalyticsSelect('amount, type, date', 'user_id', profileUserId)
+    ];
 
   for (const attempt of analyticsAttempts) {
     try {
@@ -221,7 +204,7 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   if (!supabase) return [];
 
   const user = await getAuthUserWithRetry(supabase);
-  const { profileId: profileUserId, iin: ownerIin, authUserId } = await resolveCurrentUserIdentity(
+  const { profileId: profileUserId, authUserId } = await resolveCurrentUserIdentity(
     supabase,
     user.id
   );
@@ -290,8 +273,8 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
   let txError: unknown = null;
 
   const attempts: Array<() => ReturnType<typeof parseSelectResult>> = [
-    () => parseSelectResult(uuidSelect, 'vladilec_id', authUserId),
-    () => parseSelectResult(extendedSelect, 'vladilec_id', ownerIin),
+    () => parseSelectResult(uuidSelect, 'vladilec_id', profileUserId),
+    () => parseSelectResult(extendedSelect, 'vladilec_id', profileUserId),
     () => parseSelectResult(fallbackBaseSelect, 'user_id', profileUserId)
   ];
 
@@ -360,9 +343,9 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
     const bank = asTextOrNull(txRecord.bank);
 
     const senderIin =
-      asTextOrNull(txRecord.sender_iin) ?? (kind === 'expense' ? authUserId ?? ownerIin : null);
+      asTextOrNull(txRecord.sender_iin) ?? (kind === 'expense' ? profileUserId : null);
     const recipientIin =
-      asTextOrNull(txRecord.recipient_iin) ?? (kind === 'income' ? authUserId ?? ownerIin : null);
+      asTextOrNull(txRecord.recipient_iin) ?? (kind === 'income' ? profileUserId : null);
     const senderBank = asTextOrNull(txRecord.sender_bank) ?? (kind === 'expense' ? bank : null);
     const recipientBank = asTextOrNull(txRecord.recipient_bank) ?? (kind === 'income' ? bank : null);
 

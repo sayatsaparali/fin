@@ -87,6 +87,17 @@ type RecipientAccount = {
   bank: string;
 };
 
+type ExecutePhoneTransferRpcParams = {
+  p_amount: number;
+  p_commission: number;
+  p_recipient_account_id: string;
+  p_recipient_counterparty: string;
+  p_recipient_user_id: string;
+  p_sender_account_id: string;
+  p_sender_counterparty: string;
+  p_sender_user_id: string;
+};
+
 const mapRecipientBankToDbName = (bankId: BankId): StandardBankName => {
   if (bankId === 'kaspi') return 'Kaspi Bank';
   if (bankId === 'halyk') return 'Halyk Bank';
@@ -857,10 +868,16 @@ const PaymentsPage = () => {
           return;
         }
 
-        const ownerIdFromRecipientAccount = extractProfileIdFromAccountId(recipientAccountForPhone?.id);
-        const recipientOwnerProfile = recipientAccountForPhone?.id
-          ? await findProfileByAccountId(supabase, recipientAccountForPhone.id)
-          : null;
+        const recipientAccountId = String(
+          (recipientAccountStrict as { id?: string } | null)?.id ?? ''
+        ).trim();
+        if (!recipientAccountId) {
+          setError('У получателя нет счета в этом банке');
+          return;
+        }
+
+        const ownerIdFromRecipientAccount = extractProfileIdFromAccountId(recipientAccountId);
+        const recipientOwnerProfile = await findProfileByAccountId(supabase, recipientAccountId);
         if (
           (ownerIdFromRecipientAccount && ownerIdFromRecipientAccount !== recipientUserId) ||
           (recipientOwnerProfile?.id && recipientOwnerProfile.id !== recipientUserId)
@@ -869,17 +886,21 @@ const PaymentsPage = () => {
           return;
         }
 
-        // Call RPC with all 8 required parameters
-        const { error: transferRpcError } = await supabase.rpc('execute_phone_transfer', {
-          p_sender_user_id: profileUserId,
-          p_sender_account_id: sourceAccount.id,
-          p_recipient_user_id: recipientUserId,
-          p_recipient_account_id: recipientAccountForPhone?.id ?? '',
-          p_amount: normalizeMoneyValue(normalizedAmountValue),
-          p_commission: normalizedCommission,
-          p_sender_counterparty: recipientName ?? toKzE164Phone(phoneDigits),
-          p_recipient_counterparty: profileUserId
-        });
+        const transferRpcPayload: ExecutePhoneTransferRpcParams = {
+          p_amount: Number(normalizeMoneyValue(normalizedAmountValue)),
+          p_commission: Number(normalizedCommission),
+          p_recipient_account_id: String(recipientAccountId),
+          p_recipient_counterparty: String(profileUserId),
+          p_recipient_user_id: String(recipientUserId),
+          p_sender_account_id: String(sourceAccount.id),
+          p_sender_counterparty: String(recipientName ?? toKzE164Phone(phoneDigits)),
+          p_sender_user_id: String(profileUserId)
+        };
+
+        const { error: transferRpcError } = await supabase.rpc(
+          'execute_phone_transfer',
+          transferRpcPayload
+        );
 
         if (transferRpcError) throw transferRpcError;
 

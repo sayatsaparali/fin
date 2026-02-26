@@ -1,4 +1,4 @@
-import { getSupabaseClient, isSchemaRelatedError } from './supabaseClient';
+import { getSupabaseClient } from './supabaseClient';
 import { getAuthUserWithRetry } from './authSession';
 import { resolveRequiredProfileIdByAuthUserId } from './profileIdentity';
 import { fetchAccountsByProfileId } from './accountsApi';
@@ -296,24 +296,20 @@ export const fetchTransactionsHistory = async (): Promise<DashboardTransaction[]
 
   if (txError) throw txError;
 
-  // Для расчета fallback-остатка берем счета по profile.id из new_scheta.
-  // Здесь считаем остаток после операции, если balance_after не хранится в записи.
-  const { data: accountsData, error: accountsError } = await supabase
-    .from('new_scheta')
-    .select('nazvanie_banka, balans')
-    .eq('vladilec_id', profileUserId);
-
   const runningBalanceByBank = new Map<string, number>();
-  if (accountsError) {
-    // eslint-disable-next-line no-console
-    console.error('Failed to load account balances for history fallback:', accountsError);
-  } else {
-    for (const account of accountsData ?? []) {
-      const bankName = asTextOrNull((account as { nazvanie_banka?: string | null }).nazvanie_banka);
-      const balance = asNumberOrNull((account as { balans?: number | null }).balans);
+  try {
+    // Для fallback-остатка берем нормализованные счета.
+    // fetchAccountsByProfileId уже поддерживает разные варианты имен колонок.
+    const normalizedAccounts = await fetchAccountsByProfileId(supabase, profileUserId);
+    for (const account of normalizedAccounts) {
+      const bankName = asTextOrNull(account.bank);
+      const balance = asNumberOrNull(account.balance);
       if (!bankName || balance === null) continue;
       runningBalanceByBank.set(normalizeBankKey(bankName), balance);
     }
+  } catch (accountsError) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to load account balances for history fallback:', accountsError);
   }
 
   const result: DashboardTransaction[] = [];

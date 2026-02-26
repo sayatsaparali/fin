@@ -1,14 +1,14 @@
--- FinHub: atomic phone transfer between users (new tables)
+-- FinHub: atomic phone transfer between users (new tables only)
 -- Commission flow:
--- sender debited by (amount + commission)
--- recipient credited by amount
--- commission credited to system account finhub_system
+-- 1) sender debited by (amount + commission)
+-- 2) recipient credited by amount
+-- 3) system account credited by commission
 
 -- Ensure technical system user exists.
 insert into public.new_polzovateli (id, auth_user_id, imya, familiya, nomer_telefona)
 values (
   'finhub_system',
-  '00000000-0000-0000-0000-000000000001'::uuid,
+  '00000000-0000-0000-0000-000000000001',
   'FinHub',
   'System',
   null
@@ -27,15 +27,31 @@ set
   vladilec_id = excluded.vladilec_id,
   nazvanie_banka = excluded.nazvanie_banka;
 
-create or replace function public.execute_phone_transfer(
-  p_sender_user_id text,
-  p_sender_account_id text,
-  p_recipient_user_id text,
-  p_recipient_account_id text,
+-- Drop all old overloads/signatures of execute_phone_transfer.
+do $$
+declare
+  v_signature text;
+begin
+  for v_signature in
+    select p.oid::regprocedure::text
+    from pg_proc p
+    where p.proname = 'execute_phone_transfer'
+      and p.pronamespace = 'public'::regnamespace
+  loop
+    execute format('drop function if exists %s;', v_signature);
+  end loop;
+end;
+$$;
+
+create function public.execute_phone_transfer(
   p_amount numeric,
   p_commission numeric,
+  p_recipient_account_id text,
+  p_recipient_counterparty text,
+  p_recipient_user_id text,
+  p_sender_account_id text,
   p_sender_counterparty text,
-  p_recipient_counterparty text
+  p_sender_user_id text
 )
 returns void
 language plpgsql
@@ -50,11 +66,13 @@ declare
   v_system_account_id constant text := 'finhub_system-FEE';
   v_system_user_id constant text := 'finhub_system';
 begin
-  if p_sender_user_id is null or p_recipient_user_id is null then
+  if nullif(trim(p_sender_user_id), '') is null
+     or nullif(trim(p_recipient_user_id), '') is null then
     raise exception 'Sender/recipient user id is required';
   end if;
 
-  if p_sender_account_id is null or p_recipient_account_id is null then
+  if nullif(trim(p_sender_account_id), '') is null
+     or nullif(trim(p_recipient_account_id), '') is null then
     raise exception 'Sender/recipient account id is required';
   end if;
 
@@ -72,7 +90,7 @@ begin
 
   v_total_debit := p_amount + p_commission;
 
-  -- Self-healing: if system account was removed, recreate it.
+  -- Self-healing: recreate system account if deleted.
   insert into public.new_scheta (id, vladilec_id, nazvanie_banka, balans)
   values (v_system_account_id, v_system_user_id, 'FinHub System', 0)
   on conflict (id) do update
@@ -80,22 +98,22 @@ begin
     vladilec_id = excluded.vladilec_id,
     nazvanie_banka = excluded.nazvanie_banka;
 
-  select balans, nazvanie_banka
+  select s.balans, s.nazvanie_banka
   into v_sender_balance, v_sender_bank
-  from public.new_scheta
-  where id = p_sender_account_id
-    and vladilec_id = p_sender_user_id
+  from public.new_scheta s
+  where s.id = p_sender_account_id
+    and s.vladilec_id = p_sender_user_id
   for update;
 
   if not found then
     raise exception 'Sender account not found';
   end if;
 
-  select nazvanie_banka
+  select s.nazvanie_banka
   into v_recipient_bank
-  from public.new_scheta
-  where id = p_recipient_account_id
-    and vladilec_id = p_recipient_user_id
+  from public.new_scheta s
+  where s.id = p_recipient_account_id
+    and s.vladilec_id = p_recipient_user_id
   for update;
 
   if not found then
@@ -103,9 +121,9 @@ begin
   end if;
 
   perform 1
-  from public.new_scheta
-  where id = v_system_account_id
-    and vladilec_id = v_system_user_id
+  from public.new_scheta s
+  where s.id = v_system_account_id
+    and s.vladilec_id = v_system_user_id
   for update;
 
   if not found then
@@ -122,13 +140,13 @@ begin
   where id = p_sender_account_id
     and vladilec_id = p_sender_user_id;
 
-  -- 2) recipient: full transfer amount
+  -- 2) recipient: transfer amount
   update public.new_scheta
   set balans = balans + p_amount
   where id = p_recipient_account_id
     and vladilec_id = p_recipient_user_id;
 
-  -- 3) FinHub system account: commission amount
+  -- 3) system: commission
   if p_commission > 0 then
     update public.new_scheta
     set balans = balans + p_commission
@@ -139,73 +157,118 @@ begin
   -- Sender transaction
   insert into public.new_tranzakcii (
     user_id,
+    vladilec_id,
     amount,
+    clean_amount,
     description,
     category,
     counterparty,
     commission,
     bank,
+    sender_iin,
+    sender_bank,
+    recipient_iin,
+    recipient_bank,
     type,
+    tip,
     date
   )
   values (
     p_sender_user_id,
+    p_sender_user_id,
     -v_total_debit,
+    -p_amount,
     'Перевод по номеру телефона',
     'Переводы',
     coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод по номеру телефона'),
     p_commission,
     coalesce(v_sender_bank, 'Bank'),
+    p_sender_user_id,
+    coalesce(v_sender_bank, 'Bank'),
+    p_recipient_user_id,
+    coalesce(v_recipient_bank, 'Bank'),
     'expense',
+    'minus',
     now()
   );
 
   -- Recipient transaction
   insert into public.new_tranzakcii (
     user_id,
+    vladilec_id,
     amount,
+    clean_amount,
     description,
     category,
     counterparty,
     commission,
     bank,
+    sender_iin,
+    sender_bank,
+    recipient_iin,
+    recipient_bank,
     type,
+    tip,
     date
   )
   values (
     p_recipient_user_id,
+    p_recipient_user_id,
     p_amount,
-    coalesce('Перевод от ' || nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
+    p_amount,
+    coalesce(
+      'Перевод от ' || nullif(trim(p_recipient_counterparty), ''),
+      'Перевод от пользователя FinHub'
+    ),
     'Переводы',
     coalesce(nullif(trim(p_recipient_counterparty), ''), 'Перевод от пользователя FinHub'),
     0,
     coalesce(v_recipient_bank, 'Bank'),
+    p_sender_user_id,
+    coalesce(v_sender_bank, 'Bank'),
+    p_recipient_user_id,
+    coalesce(v_recipient_bank, 'Bank'),
     'income',
+    'plus',
     now()
   );
 
-  -- System commission transaction (for audit)
+  -- System commission transaction (audit)
   if p_commission > 0 then
     insert into public.new_tranzakcii (
       user_id,
+      vladilec_id,
       amount,
+      clean_amount,
       description,
       category,
       counterparty,
       commission,
       bank,
+      sender_iin,
+      sender_bank,
+      recipient_iin,
+      recipient_bank,
       type,
+      tip,
       date
     )
     values (
       v_system_user_id,
+      v_system_user_id,
+      p_commission,
       p_commission,
       'Комиссия за перевод',
       'Комиссии',
       coalesce(nullif(trim(p_sender_counterparty), ''), 'Перевод FinHub'),
       0,
       'FinHub System',
+      p_sender_user_id,
+      coalesce(v_sender_bank, 'Bank'),
+      v_system_user_id,
+      'FinHub System',
       'income',
+      'plus',
       now()
     );
   end if;
@@ -213,12 +276,12 @@ end;
 $$;
 
 grant execute on function public.execute_phone_transfer(
-  text,
-  text,
-  text,
-  text,
   numeric,
   numeric,
+  text,
+  text,
+  text,
+  text,
   text,
   text
 ) to authenticated;

@@ -1,21 +1,24 @@
 import { useEffect, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Landmark, Zap } from 'lucide-react';
 import {
   fetchTransactionsHistory,
   type DashboardTransaction
 } from '../lib/financeApi';
 
-const formatCurrency = (value: number) =>
-  new Intl.NumberFormat('ru-KZ', {
-    style: 'currency',
-    currency: 'KZT',
-    maximumFractionDigits: 0
-  }).format(value);
+// ─── formatters ────────────────────────────────────────────────────────────
 
-const formatDateTime = (value: string) => {
-  if (!value) return 'Дата не указана';
+const fmtMoney = (value: number) =>
+  new Intl.NumberFormat('ru-KZ', {
+    maximumFractionDigits: 0
+  }).format(Math.abs(value));
+
+const fmtCurrency = (value: number) =>
+  `${fmtMoney(value)} ₸`;
+
+const fmtDateTime = (value: string) => {
+  if (!value) return '—';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Дата не указана';
+  if (Number.isNaN(date.getTime())) return '—';
   return new Intl.DateTimeFormat('ru-RU', {
     day: '2-digit',
     month: 'short',
@@ -24,86 +27,166 @@ const formatDateTime = (value: string) => {
   }).format(date);
 };
 
-const formatTenge = (value: number) =>
-  `${new Intl.NumberFormat('ru-KZ', {
-    maximumFractionDigits: 0
-  }).format(value)} Т`;
-
-const formatSignedTenge = (value: number) =>
-  `${value > 0 ? '+' : value < 0 ? '-' : ''}${formatTenge(Math.abs(value))}`;
-
-const formatIin = (value: string | null) => {
+const fmtDate = (value: string) => {
   if (!value) return '—';
-  return value.trim();
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Без даты';
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const txDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const diff = Math.round((today - txDay) / 86_400_000);
+
+  if (diff === 0) return 'Сегодня';
+  if (diff === 1) return 'Вчера';
+  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'long' }).format(date);
 };
 
-const getVisualTip = (tx: DashboardTransaction): 'plus' | 'minus' | 'other' => {
-  if (tx.tip === 'plus' || tx.tip === 'minus') return tx.tip;
+// ─── helpers ───────────────────────────────────────────────────────────────
+
+const getTip = (tx: DashboardTransaction): 'plus' | 'minus' | 'other' => {
+  if (tx.tip === 'plus') return 'plus';
+  if (tx.tip === 'minus') return 'minus';
   if (tx.kind === 'income') return 'plus';
   if (tx.kind === 'expense') return 'minus';
   return 'other';
 };
 
-const getDirectionDescription = (tx: DashboardTransaction) => {
-  const tip = getVisualTip(tx);
-  if (tip === 'plus') {
-    return `Перевод от ${formatIin(tx.senderIin)}`;
-  }
-  if (tip === 'minus') {
-    return `Перевод пользователю ${formatIin(tx.recipientIin)}`;
-  }
-  return tx.description ?? tx.counterparty ?? tx.category ?? 'Операция';
+const getTitle = (tx: DashboardTransaction): string => {
+  if (tx.counterparty && tx.counterparty.trim()) return tx.counterparty.trim();
+  const tip = getTip(tx);
+  if (tip === 'plus') return 'Входящий перевод';
+  if (tip === 'minus') return 'Исходящий перевод';
+  return 'Перевод FinHub';
 };
 
-const getTransferSummary = (tx: DashboardTransaction) => {
-  const tip = getVisualTip(tx);
-  const senderBank = tx.senderBank ?? tx.bank ?? '—';
-  const recipientBank = tx.recipientBank ?? '—';
-  const balanceAfterText = tx.balanceAfter !== null ? formatTenge(tx.balanceAfter) : '—';
-  const signedAmount =
-    tip === 'plus' ? formatSignedTenge(Math.abs(tx.amount)) : tip === 'minus' ? formatSignedTenge(-Math.abs(tx.amount)) : formatSignedTenge(tx.amount);
-  return `Перевод из [${senderBank}] в [${recipientBank}] | Сумма: ${signedAmount} | Остаток: ${balanceAfterText}`;
+const getDescription = (tx: DashboardTransaction): string | null => {
+  if (tx.description && tx.description.trim()) return tx.description.trim();
+  return null;
 };
 
-const getTransactionIcon = (
-  tx: DashboardTransaction
-): { icon: JSX.Element; tone: string } => {
-  const tip = getVisualTip(tx);
-  if (tip === 'plus') {
-    return {
-      icon: <ArrowUpRight size={14} />,
-      tone: 'bg-emerald-500/20 text-emerald-300'
-    };
-  }
-  if (tip === 'minus') {
-    return {
-      icon: <ArrowDownLeft size={14} />,
-      tone: 'bg-rose-500/20 text-rose-300'
-    };
-  }
+// ─── TransactionCard ───────────────────────────────────────────────────────
 
-  const label = (tx.category ?? tx.counterparty ?? '').toLowerCase();
+const TransactionCard = ({ tx }: { tx: DashboardTransaction }) => {
+  const tip = getTip(tx);
+  const isIncome = tip === 'plus';
+  const isExpense = tip === 'minus';
 
-  if (label.includes('taxi') || label.includes('yandex')) {
-    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-sky-500/20 text-sky-300' };
-  }
-  if (label.includes('magnum') || label.includes('starbucks')) {
-    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-violet-500/20 text-violet-300' };
-  }
-  if (label.includes('коммун') || label.includes('аренд')) {
-    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-amber-500/20 text-amber-300' };
-  }
-  if (label.includes('app store')) {
-    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-indigo-500/20 text-indigo-300' };
-  }
-  if (tx.kind === 'income') {
-    return { icon: <ArrowUpRight size={14} />, tone: 'bg-emerald-500/20 text-emerald-300' };
-  }
-  if (tx.kind === 'expense') {
-    return { icon: <ArrowDownLeft size={14} />, tone: 'bg-rose-500/20 text-rose-300' };
-  }
-  return { icon: <ArrowDownLeft size={14} />, tone: 'bg-slate-600/30 text-slate-300' };
+  const title = getTitle(tx);
+  const desc = getDescription(tx);
+  const bankName = tx.bank ?? tx.senderBank ?? tx.recipientBank ?? null;
+  const cleanAmt = tx.cleanAmount ?? Math.abs(tx.amount);
+  const commission = tx.commission ?? 0;
+  const balanceAfter = tx.balanceAfter;
+
+  const amountColor = isIncome
+    ? 'text-emerald-400'
+    : isExpense
+      ? 'text-rose-400'
+      : 'text-slate-200';
+
+  const iconTone = isIncome
+    ? 'bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/20'
+    : isExpense
+      ? 'bg-rose-500/15 text-rose-400 ring-1 ring-rose-500/20'
+      : 'bg-slate-700/50 text-slate-400 ring-1 ring-slate-600/30';
+
+  const amountPrefix = isIncome ? '+' : isExpense ? '−' : '';
+
+  return (
+    <article className="group rounded-2xl border border-slate-700/60 bg-slate-900/75 px-4 py-3 transition-all duration-150 hover:border-slate-600/80 hover:bg-slate-900/90">
+      <div className="flex items-start gap-3">
+
+        {/* Icon */}
+        <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${iconTone}`}>
+          {isIncome
+            ? <ArrowDownLeft size={16} />
+            : isExpense
+              ? <ArrowUpRight size={16} />
+              : <Zap size={15} />}
+        </div>
+
+        {/* Body */}
+        <div className="min-w-0 flex-1">
+          {/* Row 1: title + amount */}
+          <div className="flex items-start justify-between gap-2">
+            <p className="truncate text-[13px] font-semibold leading-5 text-slate-100">
+              {title}
+            </p>
+            <p className={`shrink-0 text-[14px] font-bold leading-5 tabular-nums ${amountColor}`}>
+              {amountPrefix}{fmtCurrency(Math.abs(tx.amount))}
+            </p>
+          </div>
+
+          {/* Row 2: description */}
+          {desc && (
+            <p className="mt-0.5 truncate text-[11px] text-slate-400">
+              {desc}
+            </p>
+          )}
+
+          {/* Row 3: meta chips */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+
+            {/* Bank */}
+            {bankName && (
+              <span className="flex items-center gap-1 rounded-md bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-400">
+                <Landmark size={9} />
+                {bankName}
+              </span>
+            )}
+
+            {/* Clean amount (if differs from total) */}
+            {commission > 0 && (
+              <span className="rounded-md bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-400">
+                Чистая: {fmtCurrency(cleanAmt)}
+              </span>
+            )}
+
+            {/* Commission */}
+            {commission > 0 && (
+              <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-400 ring-1 ring-amber-500/20">
+                Комиссия {fmtCurrency(commission)}
+              </span>
+            )}
+
+            {/* Balance after */}
+            {balanceAfter !== null && balanceAfter !== undefined && (
+              <span className="rounded-md bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-500">
+                Остаток: {fmtCurrency(balanceAfter)}
+              </span>
+            )}
+
+            {/* Date */}
+            <span className="ml-auto text-[10px] text-slate-600">
+              {fmtDateTime(tx.date)}
+            </span>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
 };
+
+// ─── Group header ──────────────────────────────────────────────────────────
+
+type Group = { label: string; items: DashboardTransaction[] };
+
+const groupByDate = (txs: DashboardTransaction[]): Group[] => {
+  const sorted = [...txs].sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
+  const map = new Map<string, DashboardTransaction[]>();
+  for (const tx of sorted) {
+    const label = fmtDate(tx.date);
+    const cur = map.get(label) ?? [];
+    cur.push(tx);
+    map.set(label, cur);
+  }
+  return Array.from(map.entries()).map(([label, items]) => ({ label, items }));
+};
+
+// ─── Page ──────────────────────────────────────────────────────────────────
 
 const TransactionsPage = () => {
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
@@ -122,13 +205,8 @@ const TransactionsPage = () => {
         setTransactions(data);
       } catch (e) {
         if (!isMounted) return;
-        const errorMessage =
-          e instanceof Error ? e.message : String((e as { message?: string } | null)?.message ?? '');
-        setError(
-          errorMessage
-            ? `Не удалось загрузить историю: ${errorMessage}`
-            : 'Не удалось загрузить историю. Проверьте IIN и поле new_tranzakcii.vladilec_id.'
-        );
+        const msg = e instanceof Error ? e.message : String((e as { message?: string } | null)?.message ?? '');
+        setError(msg ? `Ошибка загрузки: ${msg}` : 'Не удалось загрузить историю. Проверьте RLS-политики.');
         // eslint-disable-next-line no-console
         console.error(e);
       } finally {
@@ -137,98 +215,55 @@ const TransactionsPage = () => {
     };
 
     load();
-    const handleTransactionsUpdated = () => {
-      load(false);
-    };
-
-    window.addEventListener('finhub:transactions-updated', handleTransactionsUpdated);
-
-    return () => {
-      isMounted = false;
-      window.removeEventListener('finhub:transactions-updated', handleTransactionsUpdated);
-    };
+    const handler = () => { load(false); };
+    window.addEventListener('finhub:transactions-updated', handler);
+    return () => { isMounted = false; window.removeEventListener('finhub:transactions-updated', handler); };
   }, []);
 
+  const groups = groupByDate(transactions);
+
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
-      <section className="glass-panel px-4 py-4 sm:px-5 sm:py-5">
-        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">FinHub</p>
-        <h1 className="mt-1 text-xl font-semibold text-slate-100">Транзакции</h1>
-        <p className="mt-1 text-xs text-slate-400">История операций за последние 30 дней</p>
+    <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
+
+      {/* Header */}
+      <section className="glass-panel px-5 py-4">
+        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">FinHub</p>
+        <h1 className="mt-0.5 text-xl font-bold text-slate-100">История операций</h1>
+        <p className="mt-0.5 text-xs text-slate-500">Последние 30 дней</p>
       </section>
 
+      {/* Error */}
       {error && (
-        <section className="glass-soft mt-4 border border-red-400/40 bg-red-500/10 px-4 py-3 text-xs text-red-100">
+        <section className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-300">
           {error}
         </section>
       )}
 
-      <section className="glass-panel mt-4 px-3 py-3 sm:px-5 sm:py-4">
-        <div className="max-h-[70vh] space-y-1.5 overflow-y-auto pr-1">
-          {transactions.map((tx) => {
-            const tip = getVisualTip(tx);
-            const isIncome = tip === 'plus';
-            const isExpense = tip === 'minus';
-            const icon = getTransactionIcon(tx);
-            const amountColor = isIncome
-              ? 'text-emerald-300'
-              : isExpense
-                ? 'text-rose-300'
-                : 'text-slate-200';
-            const amountPrefix = isIncome ? '+' : isExpense ? '-' : '';
+      {/* Loading */}
+      {loading && (
+        <section className="glass-panel px-5 py-6 text-center">
+          <p className="text-xs text-slate-500 animate-pulse">Загрузка операций...</p>
+        </section>
+      )}
 
-            return (
-              <article
-                key={tx.id}
-                className="rounded-xl border border-slate-700/70 bg-slate-900/70 px-2.5 py-2 sm:px-3"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${icon.tone}`}
-                  >
-                    {icon.icon}
-                  </div>
+      {/* Empty */}
+      {!loading && !error && transactions.length === 0 && (
+        <section className="glass-panel px-5 py-8 text-center">
+          <p className="text-sm text-slate-500">Нет операций за последние 30 дней</p>
+          <p className="mt-1 text-xs text-slate-600">Совершите первый перевод, чтобы увидеть историю</p>
+        </section>
+      )}
 
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] font-medium leading-5 text-slate-100">
-                      {getTransferSummary(tx)}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      {getDirectionDescription(tx)}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-slate-500">
-                      Отправитель: {formatIin(tx.senderIin)} ({tx.senderBank ?? '—'}) • Получатель:{' '}
-                      {formatIin(tx.recipientIin)} ({tx.recipientBank ?? '—'}) •{' '}
-                      Чистая сумма: {formatTenge(tx.cleanAmount)} •{' '}
-                      {tx.commission > 0
-                        ? `Комиссия: ${formatTenge(tx.commission)}`
-                        : 'Без комиссии'}{' '}
-                      • {formatDateTime(tx.date)}
-                    </p>
-                  </div>
+      {/* Groups */}
+      {!loading && groups.map((group) => (
+        <section key={group.label} className="flex flex-col gap-2">
+          <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-600">
+            {group.label}
+          </p>
+          {group.items.map((tx) => <TransactionCard key={tx.id} tx={tx} />)}
+        </section>
+      ))}
 
-                  <p className={`shrink-0 text-right text-[13px] font-semibold ${amountColor}`}>
-                    {amountPrefix}
-                    {formatCurrency(Math.abs(tx.amount)).replace('KZT', '₸')}
-                  </p>
-                </div>
-              </article>
-            );
-          })}
-
-          {!loading && transactions.length === 0 && (
-            <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
-              В таблице `new_tranzakcii` пока нет записей за последний месяц.
-            </p>
-          )}
-
-          {loading && (
-            <p className="rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-3 text-xs text-slate-400">
-              Загрузка операций...
-            </p>
-          )}
-        </div>
-      </section>
     </div>
   );
 };

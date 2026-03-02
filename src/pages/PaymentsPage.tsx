@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
+import OwnTransferBankSelect from '../components/OwnTransferBankSelect';
 import { BankId, getBankMeta, normalizeBankId } from '../lib/banks';
 import {
   addFavoriteContact,
@@ -623,6 +624,12 @@ const PaymentsPage = () => {
     setScreen('form');
   };
 
+  const swapOwnTransferAccounts = () => {
+    if (!fromAccountId && !toAccountId) return;
+    setFromAccountId(toAccountId || fromAccountId);
+    setToAccountId(fromAccountId || toAccountId);
+  };
+
   const createTransactionRecord = async (params: {
     ownerId: string;
     senderId: string;
@@ -1146,41 +1153,9 @@ const PaymentsPage = () => {
                 <ArrowLeft size={14} /> Назад к способам перевода
               </button>
 
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-slate-300">Откуда</label>
-                <div className="max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:gap-2 max-sm:overflow-x-auto max-sm:pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
-                  {accounts.map((account) => {
-                    const bankMeta = getBankMeta(account.bank);
-                    return (
-                      <button
-                        key={account.id}
-                        type="button"
-                        onClick={() => setFromAccountId(account.id)}
-                        onPointerDown={(event) =>
-                          triggerTouchAction(event, () => setFromAccountId(account.id))
-                        }
-                        className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${fromAccountId === account.id
-                          ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                          : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                          }`}
-                      >
-                        <span className="inline-flex items-center gap-2">
-                          <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
-                            {bankMeta.logo}
-                          </span>
-                          <span>{account.bank}</span>
-                        </span>
-                        <span>{formatCurrency(account.balance).replace('KZT', '₸')}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                {accountsLoading && <p className="text-xs text-slate-500">Загрузка счетов...</p>}
-              </div>
-
-              {method === 'own' && (
+              {method !== 'own' && (
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-300">Куда</label>
+                  <label className="text-xs font-medium text-slate-300">Списать с</label>
                   <div className="max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:gap-2 max-sm:overflow-x-auto max-sm:pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
                     {accounts.map((account) => {
                       const bankMeta = getBankMeta(account.bank);
@@ -1188,17 +1163,20 @@ const PaymentsPage = () => {
                         <button
                           key={account.id}
                           type="button"
-                          onClick={() => setToAccountId(account.id)}
+                          onClick={() => setFromAccountId(account.id)}
                           onPointerDown={(event) =>
-                            triggerTouchAction(event, () => setToAccountId(account.id))
+                            triggerTouchAction(event, () => setFromAccountId(account.id))
                           }
-                          className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${toAccountId === account.id
-                            ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                            : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                            }`}
+                          className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
+                            fromAccountId === account.id
+                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
+                          }`}
                         >
                           <span className="inline-flex items-center gap-2">
-                            <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
+                            <span
+                              className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}
+                            >
                               {bankMeta.logo}
                             </span>
                             <span>{account.bank}</span>
@@ -1208,7 +1186,20 @@ const PaymentsPage = () => {
                       );
                     })}
                   </div>
+                  {accountsLoading && <p className="text-xs text-slate-500">Загрузка счетов...</p>}
                 </div>
+              )}
+
+              {method === 'own' && (
+                <OwnTransferBankSelect
+                  accounts={accounts}
+                  fromAccountId={fromAccountId}
+                  toAccountId={toAccountId}
+                  loading={accountsLoading}
+                  onFromChange={setFromAccountId}
+                  onToChange={setToAccountId}
+                  onSwap={swapOwnTransferAccounts}
+                />
               )}
 
               {method === 'phone' && (

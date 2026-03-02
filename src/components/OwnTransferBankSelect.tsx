@@ -103,7 +103,7 @@ const OwnTransferBankSelect = ({
   );
 
   const activeSelectionId = target === 'from' ? fromAccountId : toAccountId;
-  const sheetTitle = target === 'from' ? 'Списать с' : 'Зачислить на';
+  const sheetTitle = target === 'from' ? 'Откуда' : 'Куда';
 
   const handleChoose = (accountId: string) => {
     if (target === 'from') {
@@ -118,7 +118,7 @@ const OwnTransferBankSelect = ({
     <>
       <div className="space-y-3 rounded-2xl border border-emerald-500/20 bg-[#0B101B]/95 p-3 sm:p-4">
         <AccountFieldButton
-          label="Списать с"
+          label="Откуда"
           account={fromAccount}
           disabled={loading || accounts.length === 0}
           onClick={() => setTarget('from')}
@@ -137,7 +137,7 @@ const OwnTransferBankSelect = ({
         </div>
 
         <AccountFieldButton
-          label="Зачислить на"
+          label="Куда"
           account={toAccount}
           disabled={loading || accounts.length === 0}
           onClick={() => setTarget('to')}

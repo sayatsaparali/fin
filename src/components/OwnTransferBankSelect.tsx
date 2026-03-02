@@ -4,9 +4,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { getBankMeta } from '../lib/banks';
 import type { UserAccount } from '../lib/accountsApi';
 
-type SelectTarget = 'from' | 'to';
+export type BankSelectOption = {
+  id: string;
+  bank: string;
+  balance?: number | null;
+  subtitle?: string;
+  disabled?: boolean;
+};
 
-type OwnTransferBankSelectProps = {
+type DualModeProps = {
+  variant?: 'dual';
   accounts: UserAccount[];
   fromAccountId: string;
   toAccountId: string;
@@ -16,6 +23,20 @@ type OwnTransferBankSelectProps = {
   onSwap: () => void;
 };
 
+type SingleModeProps = {
+  variant: 'single';
+  label: string;
+  options: BankSelectOption[];
+  selectedId: string;
+  onSelect: (optionId: string) => void;
+  loading?: boolean;
+  disabled?: boolean;
+  sheetTitle?: string;
+  emptyText?: string;
+};
+
+type OwnTransferBankSelectProps = DualModeProps | SingleModeProps;
+
 const formatBalance = (value: number) =>
   new Intl.NumberFormat('ru-KZ', {
     style: 'currency',
@@ -23,135 +44,116 @@ const formatBalance = (value: number) =>
     maximumFractionDigits: 0
   }).format(value);
 
-type AccountFieldButtonProps = {
+const formatSecondaryLine = (option: BankSelectOption | null, fallback: string) => {
+  if (!option) return fallback;
+  if (option.subtitle) return option.subtitle;
+  if (typeof option.balance === 'number' && Number.isFinite(option.balance)) {
+    return formatBalance(option.balance).replace('KZT', '₸');
+  }
+  return 'Нажмите для выбора';
+};
+
+type BankSelectFieldProps = {
   label: string;
-  account: UserAccount | null;
+  options: BankSelectOption[];
+  selectedId: string;
+  onSelect: (optionId: string) => void;
+  loading?: boolean;
   disabled?: boolean;
-  onClick: () => void;
+  sheetTitle?: string;
+  emptyText?: string;
 };
 
-const AccountFieldButton = ({ label, account, disabled, onClick }: AccountFieldButtonProps) => {
-  const bankMeta = getBankMeta(account?.bank);
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`w-full rounded-2xl border bg-[#0B101B] px-4 py-3 text-left transition min-h-14 touch-manipulation ${
-        disabled
-          ? 'cursor-not-allowed border-slate-800 text-slate-500'
-          : 'border-emerald-400/35 text-slate-100 active:scale-[0.99]'
-      }`}
-    >
-      <span className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-        {label}
-      </span>
-      <span className="flex items-center justify-between gap-3">
-        <span className="inline-flex min-w-0 items-center gap-2.5">
-          <span
-            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${bankMeta.badgeTone}`}
-          >
-            {bankMeta.logo}
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-medium text-slate-100">
-              {account?.bank ?? 'Выбрать банк'}
-            </span>
-            <span className="block truncate text-xs text-slate-400">
-              {account ? formatBalance(account.balance).replace('KZT', '₸') : 'Нажмите для выбора'}
-            </span>
-          </span>
-        </span>
-        <ChevronDown size={18} className="shrink-0 text-[#39FF88]" />
-      </span>
-    </button>
-  );
-};
-
-const OwnTransferBankSelect = ({
-  accounts,
-  fromAccountId,
-  toAccountId,
+const BankSelectField = ({
+  label,
+  options,
+  selectedId,
+  onSelect,
   loading = false,
-  onFromChange,
-  onToChange,
-  onSwap
-}: OwnTransferBankSelectProps) => {
-  const [target, setTarget] = useState<SelectTarget | null>(null);
+  disabled = false,
+  sheetTitle,
+  emptyText = 'Нет доступных банков'
+}: BankSelectFieldProps) => {
+  const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
-    if (!target) return;
+    if (!isOpen) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setTarget(null);
-      }
+      if (event.key === 'Escape') setIsOpen(false);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [target]);
+  }, [isOpen]);
 
-  const fromAccount = useMemo(
-    () => accounts.find((account) => account.id === fromAccountId) ?? null,
-    [accounts, fromAccountId]
-  );
-  const toAccount = useMemo(
-    () => accounts.find((account) => account.id === toAccountId) ?? null,
-    [accounts, toAccountId]
+  const selectedOption = useMemo(
+    () => options.find((option) => option.id === selectedId) ?? null,
+    [options, selectedId]
   );
 
-  const activeSelectionId = target === 'from' ? fromAccountId : toAccountId;
-  const sheetTitle = target === 'from' ? 'Откуда' : 'Куда';
+  const canOpen = !disabled && !loading && options.length > 0;
+  const selectedMeta = getBankMeta(selectedOption?.bank);
 
-  const handleChoose = (accountId: string) => {
-    if (target === 'from') {
-      onFromChange(accountId);
-    } else if (target === 'to') {
-      onToChange(accountId);
-    }
-    setTarget(null);
+  const handleOpen = () => {
+    if (!canOpen) return;
+    const activeElement = document.activeElement as HTMLElement | null;
+    activeElement?.blur();
+    setIsOpen(true);
+  };
+
+  const handleSelect = (optionId: string, optionDisabled = false) => {
+    if (optionDisabled) return;
+    onSelect(optionId);
+    setIsOpen(false);
   };
 
   return (
     <>
-      <div className="space-y-3 rounded-2xl border border-emerald-500/20 bg-[#0B101B]/95 p-3 sm:p-4">
-        <AccountFieldButton
-          label="Откуда"
-          account={fromAccount}
-          disabled={loading || accounts.length === 0}
-          onClick={() => setTarget('from')}
-        />
+      <button
+        type="button"
+        onClick={handleOpen}
+        disabled={!canOpen}
+        className={`w-full min-h-14 touch-manipulation rounded-2xl border bg-[#0B101B] px-4 py-3 text-left transition ${
+          canOpen
+            ? 'border-emerald-400/35 text-slate-100 active:scale-[0.99]'
+            : 'cursor-not-allowed border-slate-800 text-slate-500'
+        }`}
+      >
+        <span className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
+          {label}
+        </span>
+        <span className="flex items-center justify-between gap-3">
+          <span className="inline-flex min-w-0 items-center gap-2.5">
+            <span
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${selectedMeta.badgeTone}`}
+            >
+              {selectedMeta.logo}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium text-slate-100">
+                {selectedOption?.bank ?? 'Выбрать банк'}
+              </span>
+              <span className="block truncate text-xs text-slate-400">
+                {formatSecondaryLine(
+                  selectedOption,
+                  options.length > 0 ? 'Нажмите для выбора' : emptyText
+                )}
+              </span>
+            </span>
+          </span>
+          <ChevronDown size={18} className="shrink-0 text-[#39FF88]" />
+        </span>
+      </button>
 
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={onSwap}
-            disabled={loading || accounts.length < 2}
-            className="inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-full border border-[#39FF88]/60 bg-[#39FF88]/12 text-[#39FF88] shadow-lg shadow-emerald-500/20 transition hover:bg-[#39FF88]/18 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-900/70 disabled:text-slate-500"
-            aria-label="Поменять банки местами"
-          >
-            <ArrowRightLeft size={18} />
-          </button>
-        </div>
-
-        <AccountFieldButton
-          label="Куда"
-          account={toAccount}
-          disabled={loading || accounts.length === 0}
-          onClick={() => setTarget('to')}
-        />
-
-        {loading && (
-          <p className="inline-flex items-center gap-2 text-xs text-slate-400">
-            <Loader2 size={14} className="animate-spin" /> Загрузка счетов...
-          </p>
-        )}
-      </div>
+      {loading && (
+        <p className="mt-2 inline-flex items-center gap-2 text-xs text-slate-400">
+          <Loader2 size={14} className="animate-spin" /> Загрузка счетов...
+        </p>
+      )}
 
       <AnimatePresence>
-        {target && (
+        {isOpen && (
           <motion.div
             className="fixed inset-0 z-[80] flex items-end sm:items-center sm:justify-center"
             initial={{ opacity: 0 }}
@@ -161,7 +163,7 @@ const OwnTransferBankSelect = ({
             <button
               type="button"
               className="absolute inset-0 bg-slate-950/75"
-              onClick={() => setTarget(null)}
+              onClick={() => setIsOpen(false)}
               aria-label="Закрыть выбор банка"
             />
 
@@ -174,24 +176,35 @@ const OwnTransferBankSelect = ({
             >
               <div className="mx-auto mt-2 h-1.5 w-14 rounded-full bg-slate-600/80" />
               <div className="px-4 pb-3 pt-4">
-                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">{sheetTitle}</p>
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                  {sheetTitle ?? label}
+                </p>
                 <p className="mt-1 text-base font-semibold text-slate-100">Выбрать банк</p>
               </div>
 
-              <div className="max-h-[62vh] space-y-2 overflow-y-auto px-3">
-                {accounts.map((account) => {
-                  const bankMeta = getBankMeta(account.bank);
-                  const isSelected = account.id === activeSelectionId;
+              <div className="max-h-[62dvh] space-y-2 overflow-y-auto px-3">
+                {options.map((option) => {
+                  const bankMeta = getBankMeta(option.bank);
+                  const isSelected = option.id === selectedId;
+                  const optionDisabled = Boolean(option.disabled);
+                  const rowSubtitle =
+                    option.subtitle ??
+                    (typeof option.balance === 'number' && Number.isFinite(option.balance)
+                      ? `${option.bank} — ${formatBalance(option.balance).replace('KZT', '₸')}`
+                      : option.bank);
 
                   return (
                     <button
-                      key={account.id}
+                      key={option.id}
                       type="button"
-                      onClick={() => handleChoose(account.id)}
+                      onClick={() => handleSelect(option.id, optionDisabled)}
+                      disabled={optionDisabled}
                       className={`flex min-h-14 w-full touch-manipulation items-center justify-between gap-3 rounded-2xl border px-3 py-2.5 text-left transition ${
-                        isSelected
-                          ? 'border-[#39FF88]/70 bg-[#39FF88]/10 text-emerald-100'
-                          : 'border-slate-700 bg-slate-900/80 text-slate-200'
+                        optionDisabled
+                          ? 'cursor-not-allowed border-slate-800 bg-slate-900/70 text-slate-500'
+                          : isSelected
+                            ? 'border-[#39FF88]/70 bg-[#39FF88]/10 text-emerald-100'
+                            : 'border-slate-700 bg-slate-900/80 text-slate-200'
                       }`}
                     >
                       <span className="inline-flex min-w-0 items-center gap-3">
@@ -201,13 +214,13 @@ const OwnTransferBankSelect = ({
                           {bankMeta.logo}
                         </span>
                         <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium">{account.bank}</span>
-                          <span className="block truncate text-xs text-slate-400">
-                            {`${account.bank} — ${formatBalance(account.balance).replace('KZT', '₸')}`}
-                          </span>
+                          <span className="block truncate text-sm font-medium">{option.bank}</span>
+                          <span className="block truncate text-xs text-slate-400">{rowSubtitle}</span>
                         </span>
                       </span>
-                      {isSelected && <Check size={16} className="shrink-0 text-[#39FF88]" />}
+                      {isSelected && !optionDisabled && (
+                        <Check size={16} className="shrink-0 text-[#39FF88]" />
+                      )}
                     </button>
                   );
                 })}
@@ -217,6 +230,67 @@ const OwnTransferBankSelect = ({
         )}
       </AnimatePresence>
     </>
+  );
+};
+
+const OwnTransferBankSelect = (props: OwnTransferBankSelectProps) => {
+  if (props.variant === 'single') {
+    return (
+      <BankSelectField
+        label={props.label}
+        options={props.options}
+        selectedId={props.selectedId}
+        onSelect={props.onSelect}
+        loading={props.loading}
+        disabled={props.disabled}
+        sheetTitle={props.sheetTitle}
+        emptyText={props.emptyText}
+      />
+    );
+  }
+
+  const options = useMemo<BankSelectOption[]>(
+    () =>
+      props.accounts.map((account) => ({
+        id: account.id,
+        bank: account.bank,
+        balance: account.balance
+      })),
+    [props.accounts]
+  );
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-emerald-500/20 bg-[#0B101B]/95 p-3 sm:p-4">
+      <BankSelectField
+        label="Откуда"
+        sheetTitle="Откуда"
+        options={options}
+        selectedId={props.fromAccountId}
+        onSelect={props.onFromChange}
+        loading={props.loading}
+      />
+
+      <div className="flex justify-center">
+        <button
+          type="button"
+          onClick={props.onSwap}
+          disabled={props.loading || props.accounts.length < 2}
+          className="inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-full border border-[#39FF88]/60 bg-[#39FF88]/12 text-[#39FF88] shadow-lg shadow-emerald-500/20 transition hover:bg-[#39FF88]/18 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-900/70 disabled:text-slate-500"
+          aria-label="Поменять банки местами"
+        >
+          <ArrowRightLeft size={18} />
+        </button>
+      </div>
+
+      <BankSelectField
+        label="Куда"
+        sheetTitle="Куда"
+        options={options}
+        selectedId={props.toAccountId}
+        onSelect={props.onToChange}
+        loading={props.loading}
+      />
+    </div>
   );
 };
 

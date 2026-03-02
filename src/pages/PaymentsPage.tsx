@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import FrequentTransfersStrip from '../components/FrequentTransfersStrip';
-import OwnTransferBankSelect from '../components/OwnTransferBankSelect';
+import OwnTransferBankSelect, { type BankSelectOption } from '../components/OwnTransferBankSelect';
 import { BankId, getBankMeta, normalizeBankId } from '../lib/banks';
 import {
   addFavoriteContact,
@@ -86,6 +86,7 @@ type ProfileLookupRow = {
 type RecipientAccount = {
   id: string;
   bank: string;
+  balance: number | null;
 };
 
 type ExecutePhoneTransferRpcParams = {
@@ -125,7 +126,7 @@ const fetchRecipientAccounts = async (
 
   const { data: rows, error: fetchError } = await supabase
     .from('new_scheta')
-    .select('id, nazvanie_banka')
+    .select('id, nazvanie_banka, balans')
     .eq('vladilec_id', userId);
 
   if (fetchError) throw fetchError;
@@ -134,7 +135,10 @@ const fetchRecipientAccounts = async (
     id: String((row as { id?: string }).id ?? ''),
     bank:
       normalizeToStandardBankName((row as { nazvanie_banka?: string | null }).nazvanie_banka) ??
-      String((row as { nazvanie_banka?: string | null }).nazvanie_banka ?? '')
+      String((row as { nazvanie_banka?: string | null }).nazvanie_banka ?? ''),
+    balance: Number.isFinite(Number((row as { balans?: number | null }).balans))
+      ? Number((row as { balans?: number | null }).balans)
+      : null
   }));
 };
 
@@ -478,8 +482,48 @@ const PaymentsPage = () => {
   const recipientAccountForPhone =
     recipientAccounts.find((account) => normalizeBankId(account.bank) === recipientBankId) ?? null;
   const recipientPhoneBankId = normalizeBankId(recipientAccountForPhone?.bank);
-  const hasRecipientBankAccount = (bankName: StandardBankName) =>
-    recipientAccounts.some((account) => account.bank === bankName);
+
+  const sourceAccountSelectOptions = useMemo<BankSelectOption[]>(
+    () =>
+      accounts.map((account) => ({
+        id: account.id,
+        bank: account.bank,
+        balance: account.balance
+      })),
+    [accounts]
+  );
+
+  const phoneRecipientBankOptions = useMemo<BankSelectOption[]>(() => {
+    if (recipientName && recipientAccounts.length === 0) return [];
+
+    if (recipientAccounts.length > 0) {
+      const uniqueByBankId = new Map<string, BankSelectOption>();
+      recipientAccounts.forEach((account) => {
+        const bankId = normalizeBankId(account.bank);
+        if (bankId === 'unknown' || uniqueByBankId.has(bankId)) return;
+        uniqueByBankId.set(bankId, {
+          id: bankId,
+          bank: account.bank,
+          balance: account.balance
+        });
+      });
+      return Array.from(uniqueByBankId.values());
+    }
+
+    return STANDARD_TRANSFER_BANK_OPTIONS.map((bank) => ({
+      id: bank.id,
+      bank: bank.name
+    }));
+  }, [recipientAccounts, recipientName]);
+
+  const cardRecipientBankOptions = useMemo<BankSelectOption[]>(
+    () =>
+      STANDARD_TRANSFER_BANK_OPTIONS.map((bank) => ({
+        id: bank.id,
+        bank: bank.name
+      })),
+    []
+  );
 
   const applyFavoriteTransfer = (favorite: FavoriteContact) => {
     setError(null);
@@ -629,6 +673,17 @@ const PaymentsPage = () => {
     setFromAccountId(toAccountId || fromAccountId);
     setToAccountId(fromAccountId || toAccountId);
   };
+
+  useEffect(() => {
+    if (method !== 'phone' || phoneRecipientBankOptions.length === 0) return;
+    const hasSelectedRecipientBank = phoneRecipientBankOptions.some(
+      (option) => option.id === recipientBankId
+    );
+    if (hasSelectedRecipientBank) return;
+
+    const firstAvailableBankId = phoneRecipientBankOptions[0]?.id;
+    if (firstAvailableBankId) setRecipientBankId(firstAvailableBankId as BankId);
+  }, [method, phoneRecipientBankOptions, recipientBankId]);
 
   const createTransactionRecord = async (params: {
     ownerId: string;
@@ -1154,40 +1209,16 @@ const PaymentsPage = () => {
               </button>
 
               {method !== 'own' && (
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-300">Списать с</label>
-                  <div className="max-sm:flex max-sm:snap-x max-sm:snap-mandatory max-sm:gap-2 max-sm:overflow-x-auto max-sm:pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible">
-                    {accounts.map((account) => {
-                      const bankMeta = getBankMeta(account.bank);
-                      return (
-                        <button
-                          key={account.id}
-                          type="button"
-                          onClick={() => setFromAccountId(account.id)}
-                          onPointerDown={(event) =>
-                            triggerTouchAction(event, () => setFromAccountId(account.id))
-                          }
-                          className={`min-h-12 max-sm:min-w-[85vw] max-sm:shrink-0 max-sm:snap-start touch-manipulation sm:min-w-0 flex items-center justify-between rounded-xl border px-3 py-2 text-xs transition ${
-                            fromAccountId === account.id
-                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                          }`}
-                        >
-                          <span className="inline-flex items-center gap-2">
-                            <span
-                              className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}
-                            >
-                              {bankMeta.logo}
-                            </span>
-                            <span>{account.bank}</span>
-                          </span>
-                          <span>{formatCurrency(account.balance).replace('KZT', '₸')}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {accountsLoading && <p className="text-xs text-slate-500">Загрузка счетов...</p>}
-                </div>
+                <OwnTransferBankSelect
+                  variant="single"
+                  label="Откуда"
+                  sheetTitle="Списать с"
+                  options={sourceAccountSelectOptions}
+                  selectedId={fromAccountId}
+                  onSelect={setFromAccountId}
+                  loading={accountsLoading}
+                  emptyText="Нет доступных счетов"
+                />
               )}
 
               {method === 'own' && (
@@ -1250,48 +1281,16 @@ const PaymentsPage = () => {
                     )}
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-slate-300">Банк получателя</label>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {STANDARD_TRANSFER_BANK_OPTIONS.map((bank) => {
-                        const bankMeta = getBankMeta(bank.name);
-                        const isBankAvailable =
-                          recipientAccounts.length === 0 ? false : hasRecipientBankAccount(bank.name);
-                        const disableBankOption =
-                          Boolean(recipientName) &&
-                          !isBankAvailable;
-                        const optionTone = disableBankOption
-                          ? 'border-slate-700 bg-slate-900/70 text-slate-500'
-                          : recipientBankId === bank.id
-                            ? 'border-emerald-400/80 bg-emerald-500/15 text-emerald-200'
-                            : 'border-emerald-700/60 bg-emerald-500/10 text-emerald-300 hover:border-emerald-500/80';
-                        return (
-                          <button
-                            key={bank.id}
-                            type="button"
-                            onClick={() => {
-                              if (disableBankOption) return;
-                              setRecipientBankId(bank.id);
-                            }}
-                            onPointerDown={(event) =>
-                              triggerTouchAction(event, () => {
-                                if (disableBankOption) return;
-                                setRecipientBankId(bank.id);
-                              })
-                            }
-                            disabled={disableBankOption}
-                            className={`min-h-11 touch-manipulation flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${optionTone} ${disableBankOption ? 'cursor-not-allowed opacity-60' : ''
-                              }`}
-                          >
-                            <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
-                              {bankMeta.logo}
-                            </span>
-                            <span>{bank.name}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <OwnTransferBankSelect
+                    variant="single"
+                    label="Куда"
+                    sheetTitle="Банк получателя"
+                    options={phoneRecipientBankOptions}
+                    selectedId={recipientBankId}
+                    onSelect={(optionId) => setRecipientBankId(optionId as BankId)}
+                    disabled={phoneRecipientBankOptions.length === 0}
+                    emptyText="У получателя нет доступных счетов"
+                  />
                 </>
               )}
 
@@ -1310,33 +1309,15 @@ const PaymentsPage = () => {
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-slate-300">Банк получателя</label>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {STANDARD_TRANSFER_BANK_OPTIONS.map((bank) => {
-                        const bankMeta = getBankMeta(bank.name);
-                        return (
-                          <button
-                            key={bank.id}
-                            type="button"
-                            onClick={() => setRecipientBankId(bank.id)}
-                            onPointerDown={(event) =>
-                              triggerTouchAction(event, () => setRecipientBankId(bank.id))
-                            }
-                            className={`min-h-11 touch-manipulation flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs transition ${recipientBankId === bank.id
-                              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
-                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500'
-                              }`}
-                          >
-                            <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${bankMeta.badgeTone}`}>
-                              {bankMeta.logo}
-                            </span>
-                            <span>{bank.name}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <OwnTransferBankSelect
+                    variant="single"
+                    label="Куда"
+                    sheetTitle="Банк получателя"
+                    options={cardRecipientBankOptions}
+                    selectedId={recipientBankId}
+                    onSelect={(optionId) => setRecipientBankId(optionId as BankId)}
+                    emptyText="Нет доступных банков"
+                  />
                 </>
               )}
 
